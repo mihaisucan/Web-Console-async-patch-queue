@@ -1,6 +1,6 @@
 # HG changeset patch
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1331738165 -7200
+# Date 1331761582 -7200
 # Node ID f156adf53752257b14ec7db012733a74c3d4fd55
 # Parent ee4e0c98cb02323c040f439eea81a98b217d3003
 Bug 673148 - (async-webconsole) Make the Web Console async
@@ -23,7 +23,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -0,0 +1,1691 @@
+@@ -0,0 +1,1699 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -84,7 +84,7 @@ new file mode 100644
 +  return obj.WebConsoleUtils;
 +});
 +
-+XPCOMUtils.defineLazyGetter(this, "l10n", function() {
++XPCOMUtils.defineLazyGetter(this, "l10n", function () {
 +  return WebConsoleUtils.l10n;
 +});
 +
@@ -1247,9 +1247,14 @@ new file mode 100644
 +    // Store the time information for this activity subtype.
 +    if (aActivitySubtype in transCodes) {
 +      httpActivity.stage = transCodes[aActivitySubtype];
-+      // We only need the first occurance of these timing events.
-+      if (!(httpActivity.stage in httpActivity.timings)) {
-+        httpActivity.timings[httpActivity.stage] = aTimestamp;
++      if (httpActivity.stage in httpActivity.timings) {
++        httpActivity.timings[httpActivity.stage].last = aTimestamp;
++      }
++      else {
++        httpActivity.timings[httpActivity.stage] = {
++          first: aTimestamp,
++          last: aTimestamp,
++        };
 +      }
 +    }
 +
@@ -1285,7 +1290,7 @@ new file mode 100644
 +    httpActivity.stage = "REQUEST_HEADER"; // activity stage (aActivitySubtype)
 +    httpActivity.discardRequestBody = !this.saveRequestAndResponseBodies;
 +    httpActivity.discardResponseBody = !this.saveRequestAndResponseBodies;
-+    httpActivity.timings.REQUEST_HEADER = aTimestamp;
++    httpActivity.timings.REQUEST_HEADER = {first: aTimestamp, last: aTimestamp};
 +
 +    let entry = httpActivity.log.entries[0];
 +    // TODO: check date parsing works
@@ -1301,7 +1306,7 @@ new file mode 100644
 +    aChannel.visitRequestHeaders({
 +      visitHeader: function _visitHeader(aName, aValue)
 +      {
-+        if (aName.toLowerCase() == "cookie") {
++        if (aName == "Cookie") {
 +          cookieHeader = aValue;
 +        }
 +        request.headers.push({name: aName, value: aValue});
@@ -1588,21 +1593,24 @@ new file mode 100644
 +  {
 +    let timings = aHttpActivity.timings;
 +    let entry = aHttpActivity.log.entries[0];
++    // TODO: compare this logic to Firebug
 +    let harTimings = entry.timings;
 +    harTimings.blocked = -1;
-+    harTimings.dns = Math.round((timings.STATUS_RESOLVED -
-+                                 timings.STATUS_RESOLVING) / 1000) || -1;
-+    harTimings.connect = Math.round((timings.STATUS_CONNECTED_TO -
-+                                     timings.STATUS_CONNECTING_TO) / 1000) || -1;
-+    harTimings.send = Math.round((timings.STATUS_WAITING_FOR -
-+                                  timings.STATUS_SENDING_TO) / 1000) || 0;
-+    harTimings.wait = Math.round((timings.STATUS_RECEIVING_FROM -
-+                                  timings.STATUS_WAITING_FOR) / 1000) || 0;
-+    harTimings.receive = Math.round((timings.RESPONSE_COMPLETE -
-+                                     timings.STATUS_RECEIVING_FROM) / 1000) || 0;
++    harTimings.dns = timings.STATUS_RESOLVED.last -
++                     timings.STATUS_RESOLVING.first;
++    harTimings.connect = timings.STATUS_CONNECTED_TO.last -
++                         timings.STATUS_CONNECTING_TO.first;
++    harTimings.send = timings.STATUS_WAITING_FOR.first -
++                      timings.STATUS_SENDING_TO.first;
++    harTimings.wait = timings.STATUS_RECEIVING_FROM.first -
++                      timings.STATUS_WAITING_FOR.first;
++    harTimings.receive = timings.RESPONSE_COMPLETE.last -
++                         timings.STATUS_RECEIVING_FROM.first;
 +
 +    entry.time = 0;
-+    for each(let time in harTimings) {
++    for (let timing in harTimings) {
++      let time = Math.round(harTimings[timing] / 1000) || -1;
++      harTimings[timing] = time;
 +      if (time > -1) {
 +        entry.time += time;
 +      }
@@ -4248,7 +4256,39 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @returns Generator
     */
-@@ -2870,137 +1370,34 @@ HUD_SERVICE.prototype =
+@@ -2811,29 +1311,31 @@ HUD_SERVICE.prototype =
+         yield aInt;
+       }
+     }
+     return sequencer(aInt);
+   },
+ 
+   // See jsapi.h (JSErrorReport flags):
+   // http://mxr.mozilla.org/mozilla-central/source/js/src/jsapi.h#3429
++  // TODO: see if these are still needed.
+   scriptErrorFlags: {
+     0: "error", // JSREPORT_ERROR
+     1: "warn", // JSREPORT_WARNING
+     2: "exception", // JSREPORT_EXCEPTION
+     4: "error", // JSREPORT_STRICT | JSREPORT_ERROR
+     5: "warn", // JSREPORT_STRICT | JSREPORT_WARNING
+     8: "error", // JSREPORT_STRICT_MODE_ERROR
+     13: "warn", // JSREPORT_STRICT_MODE_ERROR | JSREPORT_WARNING | JSREPORT_ERROR
+   },
+ 
+   /**
+    * replacement strings (L10N)
+    */
++  // TODO: see if these are still needed.
+   scriptMsgLogLevel: {
+     0: "typeError", // JSREPORT_ERROR
+     1: "typeWarning", // JSREPORT_WARNING
+     2: "typeException", // JSREPORT_EXCEPTION
+     4: "typeError", // JSREPORT_STRICT | JSREPORT_ERROR
+     5: "typeStrict", // JSREPORT_STRICT | JSREPORT_WARNING
+     8: "typeError", // JSREPORT_STRICT_MODE_ERROR
+     13: "typeWarning", // JSREPORT_STRICT_MODE_ERROR | JSREPORT_WARNING | JSREPORT_ERROR
+@@ -2870,137 +1372,34 @@ HUD_SERVICE.prototype =
      tabContainer.removeEventListener("TabClose", this.onTabClose, false);
  
      let tab = tabContainer.firstChild;
@@ -4390,7 +4430,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Animates the Console appropriately.
-@@ -3055,18 +1452,18 @@ HUD_SERVICE.prototype =
+@@ -3055,18 +1454,18 @@ HUD_SERVICE.prototype =
    /**
     * Reset the height of the Web Console.
     *
@@ -4411,7 +4451,24 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }
  
      let boxStyle = chromeWindow.getComputedStyle(HUD.HUDBox, null);
-@@ -3151,169 +1548,76 @@ HUD_SERVICE.prototype =
+@@ -3135,185 +1534,92 @@ HUD_SERVICE.prototype =
+       // copied output.
+       if (i > 0 && item.classList.contains("webconsole-new-group")) {
+         newGroup = true;
+       }
+ 
+       // Ensure the selected item hasn't been filtered by type or string.
+       if (!item.classList.contains("hud-filtered-by-type") &&
+           !item.classList.contains("hud-filtered-by-string")) {
+-        let timestampString = ConsoleUtils.timestampString(item.timestamp);
++        let timestampString = l10n.timestampString(item.timestamp);
+         if (newGroup) {
+           strings.push("--");
+           newGroup = false;
+         }
+         strings.push("[" + timestampString + "] " + item.clipboardText);
+       }
+     }
      clipboardHelper.copyString(strings.join("\n"));
    }
  };
@@ -4612,7 +4669,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      if (this.uiInOwnWindow) {
        return this.consolePanel;
      }
-@@ -3460,17 +1764,17 @@ HeadsUpDisplay.prototype = {
+@@ -3460,17 +1766,17 @@ HeadsUpDisplay.prototype = {
    /**
     * Retrieve the Web Console panel title.
     *
@@ -4631,7 +4688,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      window: null
    },
  
-@@ -3565,82 +1869,26 @@ HeadsUpDisplay.prototype = {
+@@ -3565,82 +1871,26 @@ HeadsUpDisplay.prototype = {
        this.jsterm.inputNode.focus();
      }
      if (this.gcliterm) {
@@ -4716,7 +4773,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    displayCachedConsoleMessages: function HUD_displayCachedConsoleMessages()
    {
-@@ -3684,45 +1932,16 @@ HeadsUpDisplay.prototype = {
+@@ -3684,45 +1934,16 @@ HeadsUpDisplay.prototype = {
      if (numChildren && this.outputNode.clientHeight) {
        // We also check the clientHeight to force a reflow, otherwise
        // ensureIndexIsVisible() does not work after outputNode.hidden = false.
@@ -4762,7 +4819,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    makeXULNode:
    function HUD_makeXULNode(aTag)
    {
-@@ -3731,45 +1950,42 @@ HeadsUpDisplay.prototype = {
+@@ -3731,45 +1952,42 @@ HeadsUpDisplay.prototype = {
  
    /**
     * Build the UI of each HeadsUpDisplay
@@ -4812,7 +4869,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      this.filterPrefs = HUDService.getDefaultFilterPrefs(this.hudId);
  
-@@ -3797,24 +2013,24 @@ HeadsUpDisplay.prototype = {
+@@ -3797,24 +2015,24 @@ HeadsUpDisplay.prototype = {
      this.outputNode.setAttribute("orient", "vertical");
      this.outputNode.setAttribute("context", this.hudId + "-output-contextmenu");
      this.outputNode.setAttribute("style", "direction: ltr;");
@@ -4842,7 +4899,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * sets the click events for all binary toggle filter buttons
     *
-@@ -3937,38 +2153,38 @@ HeadsUpDisplay.prototype = {
+@@ -3937,38 +2155,38 @@ HeadsUpDisplay.prototype = {
        this.positionConsole("below");
      }).bind(this);
      this._positionConsoleWindow = (function HUD_positionWindow() {
@@ -4886,7 +4943,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.positionMenuitems = {
        last: null,
        above: itemAbove,
-@@ -3991,38 +2207,38 @@ HeadsUpDisplay.prototype = {
+@@ -3991,38 +2209,38 @@ HeadsUpDisplay.prototype = {
      let id = this.hudId + "-output-contextmenu";
      menuPopup.setAttribute("id", id);
      menuPopup.addEventListener("popupshowing", function() {
@@ -4931,7 +4988,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      aConsoleWrapper.appendChild(menuPopup);
      aConsoleWrapper.setAttribute("context", id);
    },
-@@ -4043,30 +2259,30 @@ HeadsUpDisplay.prototype = {
+@@ -4043,30 +2261,30 @@ HeadsUpDisplay.prototype = {
      let toolbarButton = this.makeXULNode("toolbarbutton");
      aParent.appendChild(toolbarButton);
  
@@ -4965,7 +5022,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        menuItem.setAttribute("prefKey", prefKey);
  
        let checked = this.filterPrefs[prefKey];
-@@ -4123,17 +2339,17 @@ HeadsUpDisplay.prototype = {
+@@ -4123,17 +2341,17 @@ HeadsUpDisplay.prototype = {
          hud.jsterm.clearOutput(true);
        }
        if (hud.gcliterm) {
@@ -4984,7 +5041,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Destroy the property inspector message node. This performs the necessary
-@@ -4166,28 +2382,16 @@ HeadsUpDisplay.prototype = {
+@@ -4166,28 +2384,16 @@ HeadsUpDisplay.prototype = {
        let positionPref = Services.prefs.getCharPref("devtools.webconsole.position");
        this.positionConsole(positionPref);
      }
@@ -5013,7 +5070,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Destroy the HUD object. Call this method to avoid memory leaks when the Web
-@@ -4207,59 +2411,72 @@ HeadsUpDisplay.prototype = {
+@@ -4207,59 +2413,72 @@ HeadsUpDisplay.prototype = {
      this.positionMenuitems.below.removeEventListener("command",
        this._positionConsoleBelow, false);
      this.positionMenuitems.window.removeEventListener("command",
@@ -5110,7 +5167,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * @param ignored This parameter is currently ignored, and will be removed
   * See bug 594304
   * @param aDocument The document, the factory is to generate nodes from
-@@ -4281,991 +2498,537 @@ function NodeFactory(aFactoryType, ignor
+@@ -4281,991 +2500,541 @@ function NodeFactory(aFactoryType, ignor
      }
    }
    else {
@@ -6271,7 +6328,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +                   response.statusText;
 +      if (aMessage.stage == "TRANSACTION_CLOSE") {
 +        status += " " + l10n.getFormatStr("NetworkPanel.durationMS",
-+                                                [entry.time]);
++                                          [entry.time]);
        }
 -    }, false);
 -
@@ -6291,6 +6348,10 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +        ConsoleUtils.setMessageType(messageNode, CATEGORY_NETWORK,
 +                                    SEVERITY_ERROR);
 +      }
++    }
++
++    if (messageNode._netPanel) {
++      messageNode._netPanel.update();
 +    }
    },
  
@@ -6491,7 +6552,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @returns void
     */
    resizeInput: function JST_resizeInput()
-@@ -5393,21 +3156,25 @@ JSTerm.prototype = {
+@@ -5393,21 +3162,25 @@ JSTerm.prototype = {
        case Ci.nsIDOMKeyEvent.DOM_VK_TAB:
          // Generate a completion and accept the first proposed value.
          if (this.complete(this.COMPLETE_HINT_ONLY) &&
@@ -6518,7 +6579,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Go up/down the history stack of input values.
     *
-@@ -5500,27 +3267,27 @@ JSTerm.prototype = {
+@@ -5500,27 +3273,27 @@ JSTerm.prototype = {
        return false;
      }
  
@@ -6548,7 +6609,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *          cursor position to the end of the completed text.
     *          If there is only one possible completion, then this completion
     *          value is used and the cursor is put at the end of the completion.
-@@ -5532,99 +3299,139 @@ JSTerm.prototype = {
+@@ -5532,99 +3305,139 @@ JSTerm.prototype = {
     *          last time this function was called, then the same completion is
     *          used again. If there is only one possible completion, then
     *          the inputNode.value is set to this value and the selection is set
@@ -6724,7 +6785,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Accept the proposed input completion.
-@@ -5633,17 +3440,17 @@ JSTerm.prototype = {
+@@ -5633,17 +3446,17 @@ JSTerm.prototype = {
     *         True if there was a selected completion item and the input value
     *         was updated, false otherwise.
     */
@@ -6743,7 +6804,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      this.clearCompletion();
  
-@@ -5663,110 +3470,38 @@ JSTerm.prototype = {
+@@ -5663,110 +3476,38 @@ JSTerm.prototype = {
      this.completeNode.value = prefix + aSuffix;
    },
  
@@ -6869,26 +6930,50 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  { }
  
  FirefoxApplicationHooks.prototype = {
-@@ -5822,17 +3557,17 @@ ConsoleUtils = {
-    * @returns string The timestamp formatted for display.
-    */
-   timestampString: function ConsoleUtils_timestampString(ms)
+@@ -5800,42 +3541,16 @@ ConsoleUtils = {
    {
-     var d = new Date(ms ? ms : null);
-     let hours = d.getHours(), minutes = d.getMinutes();
-     let seconds = d.getSeconds(), milliseconds = d.getMilliseconds();
-     let parameters = [ hours, minutes, seconds, milliseconds ];
--    return HUDService.getFormatStr("timestampFormat", parameters);
-+    return l10n.getFormatStr("timestampFormat", parameters);
+     let str = Cc["@mozilla.org/supports-string;1"].
+       createInstance(Ci.nsISupportsString);
+     str.data = aString;
+     return str;
    },
  
    /**
+-   * Generates a millisecond resolution timestamp.
+-   *
+-   * @returns integer
+-   */
+-  timestamp: function ConsoleUtils_timestamp()
+-  {
+-    return Date.now();
+-  },
+-
+-  /**
+-   * Generates a formatted timestamp string for displaying in console messages.
+-   *
+-   * @param integer [ms] Optional, allows you to specify the timestamp in
+-   * milliseconds since the UNIX epoch.
+-   * @returns string The timestamp formatted for display.
+-   */
+-  timestampString: function ConsoleUtils_timestampString(ms)
+-  {
+-    var d = new Date(ms ? ms : null);
+-    let hours = d.getHours(), minutes = d.getMinutes();
+-    let seconds = d.getSeconds(), milliseconds = d.getMilliseconds();
+-    let parameters = [ hours, minutes, seconds, milliseconds ];
+-    return HUDService.getFormatStr("timestampFormat", parameters);
+-  },
+-
+-  /**
     * Scrolls a node so that it's visible in its containing XUL "scrollbox"
     * element.
     *
     * @param nsIDOMNode aNode
     *        The node to make visible.
-@@ -5924,18 +3659,20 @@ ConsoleUtils = {
+    * @returns void
+    */
+   scrollToVisible: function ConsoleUtils_scrollToVisible(aNode) {
+@@ -5924,18 +3639,20 @@ ConsoleUtils = {
      // Store the body text, since it is needed later for the property tree
      // case.
      let body = aBody;
@@ -6911,7 +6996,28 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        aBody = aDocument.createTextNode(aBody);
      }
  
-@@ -5998,17 +3735,24 @@ ConsoleUtils = {
+@@ -5946,18 +3663,18 @@ ConsoleUtils = {
+     let repeatNode = aDocument.createElementNS(XUL_NS, "label");
+     repeatNode.setAttribute("value", "1");
+     repeatNode.classList.add("webconsole-msg-repeat");
+     repeatContainer.appendChild(repeatNode);
+ 
+     // Create the timestamp.
+     let timestampNode = aDocument.createElementNS(XUL_NS, "label");
+     timestampNode.classList.add("webconsole-timestamp");
+-    let timestamp = aTimeStamp || ConsoleUtils.timestamp();
+-    let timestampString = ConsoleUtils.timestampString(timestamp);
++    let timestamp = aTimeStamp || Date.now();
++    let timestampString = l10n.timestampString(timestamp);
+     timestampNode.setAttribute("value", timestampString);
+ 
+     // Create the source location (e.g. www.example.com:6) that sits on the
+     // right side of the message, if applicable.
+     let locationNode;
+     if (aSourceURL) {
+       locationNode = this.createLocationNode(aDocument, aSourceURL,
+                                              aSourceLine);
+@@ -5998,17 +3715,24 @@ ConsoleUtils = {
  
        tree.appendChild(aDocument.createElement("treechildren"));
  
@@ -6937,7 +7043,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      node.appendChild(repeatContainer);
      if (locationNode) {
        node.appendChild(locationNode);
-@@ -6073,17 +3817,17 @@ ConsoleUtils = {
+@@ -6073,17 +3797,17 @@ ConsoleUtils = {
     */
    createLocationNode:
    function ConsoleUtils_createLocationNode(aDocument, aSourceURL,
@@ -6956,7 +7062,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      // Style appropriately.
      locationNode.setAttribute("crop", "center");
      locationNode.setAttribute("title", aSourceURL);
-@@ -6293,64 +4037,33 @@ ConsoleUtils = {
+@@ -6293,64 +4017,33 @@ ConsoleUtils = {
    {
      let lastNodeHeight = aOutputNode.lastChild ?
                           aOutputNode.lastChild.clientHeight : 0;
@@ -7025,7 +7131,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
          HUDService.animate(hudId, ANIMATE_OUT, function() {
            // If the user closes the console while the console is animating away,
-@@ -6362,16 +4075,17 @@ HeadsUpDisplayUICommands = {
+@@ -6362,16 +4055,17 @@ HeadsUpDisplayUICommands = {
            }
          });
        }
@@ -7043,7 +7149,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *         The hudId or null if the active chrome window has no open Web
     *         Console.
     */
-@@ -6510,50 +4224,16 @@ function ConsoleEntry(aConfig, id)
+@@ -6510,50 +4204,16 @@ function ConsoleEntry(aConfig, id)
  
  ConsoleEntry.prototype = {
  
@@ -7094,7 +7200,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * A controller (an instance of nsIController) that makes editing actions
   * behave appropriately in the context of the Web Console.
   */
-@@ -6634,136 +4314,16 @@ CommandController.prototype = {
+@@ -6634,136 +4294,16 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
@@ -7231,7 +7337,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * Get the app's name so we can properly dispatch app-specific
   * methods per API call
   * @returns Gecko application name
-@@ -6782,23 +4342,29 @@ function appName()
+@@ -6782,23 +4322,29 @@ function appName()
    let name = APP_ID_TABLE[APP_ID];
  
    if (name){
@@ -7263,7 +7369,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  /**
   * Some commands need customization - this is how we get at them.
-@@ -6820,22 +4386,24 @@ let commandExports = undefined;
+@@ -6820,22 +4366,24 @@ let commandExports = undefined;
   * @param object aConsole
   *        Console object to use within the GcliTerm.
   * @param nsIDOMElement aHintNode
@@ -7289,7 +7395,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    this.hide = this.hide.bind(this);
  
    // Allow GCLI:Inputter to decide how and when to open a scratchpad window
-@@ -6844,29 +4412,29 @@ function GcliTerm(aContentWindow, aHudId
+@@ -6844,29 +4392,29 @@ function GcliTerm(aContentWindow, aHudId
        return aEvent.shiftKey &&
            aEvent.keyCode === Ci.nsIDOMKeyEvent.DOM_VK_RETURN;
      },
@@ -7321,7 +7427,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      hintElement: this.hintNode,
      consoleWrap: aConsoleWrap,
      scratchpad: scratchpad,
-@@ -6922,44 +4490,37 @@ GcliTerm.prototype = {
+@@ -6922,44 +4470,37 @@ GcliTerm.prototype = {
      delete this.opts.contentDocument;
      delete this.opts.jsEnvironment;
      delete this.opts.gcliTerm;
@@ -7370,7 +7476,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    createUI: function Gcli_createUI()
    {
-@@ -6988,72 +4549,30 @@ GcliTerm.prototype = {
+@@ -6988,72 +4529,30 @@ GcliTerm.prototype = {
    onCommandOutput: function Gcli_onCommandOutput(aEvent)
    {
      // When we can update the history of the console, then we should stop
@@ -7450,7 +7556,28 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        '<richlistitem xmlns="' + XUL_NS + '" _clipboardText="${clipboardText}"' +
        '    _timestamp="${timestamp}" _id="${id}" class="hud-msg-node">' +
        '  <label class="webconsole-timestamp" _value="${timestampString}"/>' +
-@@ -7080,96 +4599,84 @@ GcliTerm.prototype = {
+@@ -7061,115 +4560,103 @@ GcliTerm.prototype = {
+       '    <image class="webconsole-msg-icon"/>' +
+       '    <spacer flex="1"/>' +
+       '  </vbox>' +
+       '  <hbox flex="1" class="gcliterm-msg-body">${output}</hbox>' +
+       '  <hbox align="start"><label value="1" class="webconsole-msg-repeat"/></hbox>' +
+       '</richlistitem>').firstChild;
+ 
+     let hud = HUDService.getHudReferenceById(this.hudId);
+-    let timestamp = ConsoleUtils.timestamp();
++    let timestamp = Date.now();
+     template(element, {
+       iconContainerStyle: "margin-left=" + (hud.groupDepth * GROUP_INDENT) + "px",
+       output: output,
+       timestamp: timestamp,
+-      timestampString: ConsoleUtils.timestampString(timestamp),
++      timestampString: l10n.timestampString(timestamp),
+       clipboardText: output.innerText,
+       id: "console-msg-" + HUDService.sequenceId()
+     });
+ 
+     ConsoleUtils.setMessageType(element, CATEGORY_OUTPUT, SEVERITY_LOG);
      ConsoleUtils.outputMessageNode(element, this.hudId);
    },
  
@@ -7576,7 +7703,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
 --- a/browser/devtools/webconsole/Makefile.in
 +++ b/browser/devtools/webconsole/Makefile.in
-@@ -43,16 +43,17 @@ srcdir		= @srcdir@
+@@ -43,16 +43,18 @@ srcdir		= @srcdir@
  VPATH		= @srcdir@
  
  include $(DEPTH)/config/autoconf.mk
@@ -7586,6 +7713,7 @@ diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconso
  		NetworkHelper.jsm \
  		AutocompletePopup.jsm \
 +		WebConsoleUtils.jsm \
++		NetworkPanel.jsm \
  		gcli.jsm \
  		GcliCommands.jsm \
  		GcliTiltCommands.jsm \
@@ -7703,7 +7831,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/NetworkPanel.jsm
-@@ -0,0 +1,731 @@
+@@ -0,0 +1,727 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -8028,9 +8156,9 @@ new file mode 100644
 +    aList.forEach(function(aItem) {
 +      let name = aItem.name;
 +      let value = aItem.value;
-+      /*if (aIgnoreCookie && name == "Cookie") {
++      if (aIgnoreCookie && name == "Cookie") {
 +        return;
-+      }*/
++      }
 +
 +      /**
 +       * The following code creates the HTML:
@@ -8083,14 +8211,13 @@ new file mode 100644
 +    let entry = this.httpActivity.log.entries[0];
 +    let timing = entry.timings;
 +    let request = entry.request;
-+    // FIXME
 +    let requestTime = WebConsoleUtils.
 +                      convertISO8601toMilliseconds(entry.startedDateTime);
 +
 +    this._appendTextNode("headUrl", request.url);
 +    this._appendTextNode("headMethod", request.method);
 +    this._appendTextNode("requestHeadersInfo",
-+                         ConsoleUtils.timestampString(requestTime));
++                         l10n.timestampString(requestTime));
 +
 +    this._appendList("requestHeadersContent", request.headers, true);
 +
@@ -8152,17 +8279,17 @@ new file mode 100644
 +   *
 +   * @returns void
 +   */
-+  _displayResponseHeader: function NP_displayResponseHeader()
++  _displayResponseHeader: function NP__displayResponseHeader()
 +  {
 +    let entry = this.httpActivity.log.entries[0];
 +    let timing = entry.timings;
 +    let response = entry.response;
 +
-+    this._appendTextNode("headStatus", response.httpVersion + " " +
-+                                       response.status + " " +
-+                                       response.statusText);
++    this._appendTextNode("headStatus",
++                         [response.httpVersion, response.status,
++                          response.statusText].join(" "));
 +
-+    let deltaDuration = timing.sent + timing.wait;
++    let deltaDuration = timing.send + timing.wait;
 +    this._appendTextNode("responseHeadersInfo",
 +      this._format("durationMS", [deltaDuration]));
 +
@@ -8300,11 +8427,8 @@ new file mode 100644
 +   */
 +  update: function NP_update()
 +  {
-+    /**
-+     * After the iframe's contentWindow is ready, the document object is set.
-+     * If the document object isn't set yet, then the page is loaded and nothing
-+     * can be updated.
-+     */
++    // After the iframe's contentWindow is ready, the document object is set.
++    // If the document object is not available yet nothing needs to be updated.
 +    if (!this.document) {
 +      return;
 +    }
@@ -8322,7 +8446,7 @@ new file mode 100644
 +
 +      case this._DISPLAYED_REQUEST_HEADER:
 +        // Process the request body if there is one.
-+        // FIXME
++        // FIXME: need to be able to display the request body, if any.
 +        if (!request.bodyDiscarded && request.body) {
 +          // Check if we send some form data. If so, display the form data special.
 +          if (this._isRequestBodyFormData) {
@@ -8339,8 +8463,8 @@ new file mode 100644
 +        // There is always a response header. Therefore we can skip here if
 +        // we don't have a response header yet and don't have to try updating
 +        // anything else in the NetworkPanel.
-+        if (!response.headers) {
-+          break
++        if (!response.headers.length) {
++          break;
 +        }
 +        this._displayResponseHeader();
 +        this._state = this._DISPLAYED_RESPONSE_HEADER;
@@ -9125,7 +9249,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -0,0 +1,927 @@
+@@ -0,0 +1,961 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -9179,7 +9303,7 @@ new file mode 100644
 +
 +var EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider"];
 +
-+const HUD_STRINGS_URI = "chrome://global/locale/headsUpDisplay.properties";
++const HUD_STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
 +
 +const TYPES = { OBJECT: 0,
 +                FUNCTION: 1,
@@ -9370,8 +9494,8 @@ new file mode 100644
 +   *
 +   * @param mixed aResult
 +   *        The evaluation result object you want displayed.
-+   * @returns string
-+   *          The string that can be displayed.
++   * @return string
++   *         The string that can be displayed.
 +   */
 +  formatResult: function WCU_formatResult(aResult)
 +  {
@@ -9413,8 +9537,8 @@ new file mode 100644
 +   *
 +   * @param string aString
 +   *        The string you want to display.
-+   * @returns string
-+   *          The string that can be displayed.
++   * @return string
++   *         The string that can be displayed.
 +   */
 +  formatResultString: function WCU_formatResultString(aString)
 +  {
@@ -9443,8 +9567,8 @@ new file mode 100644
 +   *
 +   * @param mixed aResult
 +   *        The evaluation result object you want to check if it is inspectable.
-+   * @returns boolean
-+   *          True if the object is inspectable or false otherwise.
++   * @return boolean
++   *         True if the object is inspectable or false otherwise.
 +   */
 +  isResultInspectable: function WCU_isResultInspectable(aResult)
 +  {
@@ -9473,9 +9597,9 @@ new file mode 100644
 +   *
 +   * @param mixed aResult
 +   *        The evaluation result object you want to check.
-+   * @returns string
-+   *          Constructor name or type: string, number, boolean, regexp, date,
-+   *          function, object, null, undefined...
++   * @return string
++   *         Constructor name or type: string, number, boolean, regexp, date,
++   *         function, object, null, undefined...
 +   */
 +  getResultType: function WCU_getResultType(aResult)
 +  {
@@ -9492,12 +9616,12 @@ new file mode 100644
 +   *
 +   * @param object aObject
 +   *        The object to operate on.
-+   * @returns object
-+   *          A object with the form:
-+   *            {
-+   *              type: TYPES.OBJECT || TYPES.FUNCTION || ...
-+   *              display: string for displaying the object in the tree
-+   *            }
++   * @return object
++   *         A object with the form:
++   *         {
++   *           type: TYPES.OBJECT || TYPES.FUNCTION || ...
++   *           display: string for displaying the object in the tree
++   *         }
 +   */
 +  presentableValueFor: function WCU_presentableValueFor(aObject)
 +  {
@@ -9798,9 +9922,9 @@ new file mode 100644
 +   * 1970 00:00:00 UTC.
 +   *
 +   * @param string aTime
-+   *         The date in ISO 8601 format.
++   *        The date in ISO 8601 format.
 +   * @return string
-+   *        Milliseconds since 1 January 1970 00:00:00 UTC.
++   *         Milliseconds since 1 January 1970 00:00:00 UTC.
 +   */
 +  convertISO8601toMilliseconds: function WCU_convertISO8601toMilliseconds(aTime)
 +  {
@@ -9813,14 +9937,48 @@ new file mode 100644
 +//////////////////////////////////////////////////////////////////////////
 +
 +WebConsoleUtils.l10n = {
-+  getStr: function l10n_getStr(aName)
++  /**
++   * Generates a formatted timestamp string for displaying in console messages.
++   *
++   * @param integer [aMilliseconds]
++   *        Optional, allows you to specify the timestamp in milliseconds since
++   *        the UNIX epoch.
++   * @returns string
++   *          The timestamp formatted for display.
++   */
++  timestampString: function WCU_l10n_timestampString(aMilliseconds)
 +  {
-+    return this.stringBundle.GetStringFromName(aName);
++    let d = new Date(aMilliseconds ? aMilliseconds : null);
++    let hours = d.getHours(), minutes = d.getMinutes();
++    let seconds = d.getSeconds(), milliseconds = d.getMilliseconds();
++    let parameters = [ hours, minutes, seconds, milliseconds ];
++    return this.getFormatStr("timestampFormat", parameters);
 +  },
 +
-+  getFormatStr: function l10n_getFormatStr(aName, aArray)
++  getStr: function WCU_l10n_getStr(aName)
 +  {
-+    return this.stringBundle.formatStringFromName(aName, aArray, aArray.length);
++    let result;
++    try {
++      result = this.stringBundle.GetStringFromName(aName);
++    }
++    catch (ex) {
++      Cu.reportError("Failed to get string: " + aName);
++      throw ex;
++    }
++    return result;
++  },
++
++  getFormatStr: function WCU_l10n_getFormatStr(aName, aArray)
++  {
++    let result;
++    try {
++      result = this.stringBundle.formatStringFromName(aName, aArray, aArray.length);
++    }
++    catch (ex) {
++      Cu.reportError("Failed to format string: " + aName);
++      throw ex;
++    }
++    return result;
 +  },
 +};
 +
