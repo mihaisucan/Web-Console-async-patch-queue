@@ -1,6 +1,6 @@
 # HG changeset patch
-# User Sonny Piers <sonny.piers@gmail.com>
-# Date 1320144848 -7200
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1331738165 -7200
 # Node ID f156adf53752257b14ec7db012733a74c3d4fd55
 # Parent ee4e0c98cb02323c040f439eea81a98b217d3003
 Bug 673148 - (async-webconsole) Make the Web Console async
@@ -23,7 +23,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -0,0 +1,1713 @@
+@@ -0,0 +1,1691 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -84,6 +84,10 @@ new file mode 100644
 +  return obj.WebConsoleUtils;
 +});
 +
++XPCOMUtils.defineLazyGetter(this, "l10n", function() {
++  return WebConsoleUtils.l10n;
++});
++
 +XPCOMUtils.defineLazyGetter(this, "JSPropertyProvider", function () {
 +  let obj = {};
 +  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
@@ -106,31 +110,12 @@ new file mode 100644
 +  return obj.NetUtil;
 +});
 +
-+const HUD_STRINGS_URI = "chrome://global/locale/headsUpDisplay.properties";
-+
 +
 +/**
 + * Evaluation result objects are cached in this object. The chrome process can
 + * request any object pased on its ID.
 + */
 +let gObjectCache = {};
-+
-+let l10n = {
-+  getStr: function l10n_getStr(aName)
-+  {
-+    return this.stringBundle.GetStringFromName(aName);
-+  },
-+
-+  getFormatStr: function l10n_getFormatStr(aName, aArray)
-+  {
-+    return this.stringBundle.formatStringFromName(aName, aArray, aArray.length);
-+  },
-+};
-+
-+
-+XPCOMUtils.defineLazyGetter(l10n, "stringBundle", function() {
-+  return Services.strings.createBundle(HUD_STRINGS_URI);
-+});
 +
 +
 +/**
@@ -840,6 +825,11 @@ new file mode 100644
 +    XPCOMUtils.generateQI([Ci.nsIStreamListener, Ci.nsIInputStreamCallback,
 +                           Ci.nsIRequestObserver, Ci.nsISupports]),
 +
++  /**
++   * This NetworkResponseListener tracks the NetworkMonitor.openResponses object
++   * to find the associated uncached headers.
++   * @private
++   */
 +  _foundOpenResponse: false,
 +
 +  /**
@@ -920,25 +910,10 @@ new file mode 100644
 +   */
 +  onStartRequest: function NRL_onStartRequest(aRequest, aContext)
 +  {
++    dump("NRL_onStartRequest\n");
 +    this.request = aRequest;
 +
-+    let channel = this.httpActivity.channel;
-+    dump("NRL_onStartRequest\n");
 +    this._findOpenResponse();
-+
-+    // Check response status and discard the body for redirects.
-+    // TODO: is this needed?
-+    if (!this.httpActivity.discardResponseBody &&
-+        channel instanceof Ci.nsIHttpChannel) {
-+      switch (channel.responseStatus) {
-+        case HTTP_MOVED_PERMANENTLY:
-+        case HTTP_FOUND:
-+        case HTTP_SEE_OTHER:
-+        case HTTP_TEMPORARY_REDIRECT:
-+          this.httpActivity.discardResponseBody = true;
-+          break;
-+      }
-+    }
 +
 +    // Asynchronously wait for the data coming from the request.
 +    this.setAsyncListener(this.sink.inputStream, this);
@@ -980,6 +955,7 @@ new file mode 100644
 +  _findOpenResponse: function NRL__findOpenResponse()
 +  {
 +    if (this._foundOpenResponse) {
++      dump("NRL__findOpenResponse already did\n");
 +      return;
 +    }
 +
@@ -1029,6 +1005,8 @@ new file mode 100644
 +
 +    // Remove our listener from the request input stream.
 +    this.setAsyncListener(this.sink.inputStream, null);
++
++    this._findOpenResponse();
 +
 +    /* FIXME: need to see what we do with the network tests
 +    if (HUDService.lastFinishedRequestCallback) {
@@ -1148,10 +1126,9 @@ new file mode 100644
 +  httpResponseExaminer: function NM_httpResponseExaminer(aSubject, aTopic)
 +  {
 +    // The httpResponseExaminer is used to retrieve the uncached response
-+    // headers. The data retrieved is stored in openResponses if the associated
-+    // openRequest object cannot be found. When NetworkMonitor receives
-+    // notification that the transaction has closes, the data from openResponses
-+    // is used.
++    // headers. The data retrieved is stored in openResponses. When
++    // NetworkResponseListener is responsible with updating the httpActivity
++    // object with the data from the new object in openResponses.
 +
 +    if (aTopic != "http-on-examine-response" ||
 +        !(aSubject instanceof Ci.nsIHttpChannel)) {
@@ -1364,6 +1341,7 @@ new file mode 100644
 +    // this point.
 +    // TODO: Bug 708717 - Add support for network log export to HAR
 +    // Also see: http://www.softwareishard.com/blog/har-12-spec
++    // TODO: update these comments.
 +    return httpActivity = {
 +      hudId: JSTerm.hudId,
 +      id: JSTerm.sequenceId,
@@ -1497,8 +1475,8 @@ new file mode 100644
 +  _onResponseHeader:
 +  function NM__onResponseHeader(aHttpActivity, aExtraStringData)
 +  {
-+    // aExtraStringData contains the response headers. The first line contains
-+    // the response status (e.g. HTTP/1.1 200 OK).
++    // aExtraStringData contains the uncached response headers. The first line
++    // contains the response status (e.g. HTTP/1.1 200 OK).
 +    //
 +    // Note: The response header is not saved here. Calling the
 +    // aChannel.visitResponseHeaders() at this point sometimes causes an
@@ -1740,7 +1718,7 @@ new file mode 100644
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -40,37 +40,29 @@
+@@ -40,113 +40,105 @@
   * use your version of this file under the terms of the MPL, indicate your
   * decision by deleting the provisions above and replace them with the notice
   * and other provisions required by the GPL or the LGPL. If you do not delete
@@ -1772,15 +1750,40 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -                                   "@mozilla.org/network/http-activity-distributor;1",
 -                                   "nsIHttpActivityDistributor");
 -
- XPCOMUtils.defineLazyServiceGetter(this, "mimeService",
-                                    "@mozilla.org/mime;1",
-                                    "nsIMIMEService");
- 
+-XPCOMUtils.defineLazyServiceGetter(this, "mimeService",
+-                                   "@mozilla.org/mime;1",
+-                                   "nsIMIMEService");
+-
  XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
                                     "@mozilla.org/widget/clipboardhelper;1",
                                     "nsIClipboardHelper");
  
-@@ -103,48 +95,54 @@ XPCOMUtils.defineLazyGetter(this, "Prope
+ XPCOMUtils.defineLazyGetter(this, "gcli", function () {
+   var obj = {};
+   Cu.import("resource:///modules/gcli.jsm", obj);
+   return obj.gcli;
+ });
+ 
+ XPCOMUtils.defineLazyGetter(this, "CssRuleView", function() {
+   let tmp = {};
+   Cu.import("resource:///modules/devtools/CssRuleView.jsm", tmp);
+   return tmp.CssRuleView;
+ });
+ 
+-XPCOMUtils.defineLazyGetter(this, "NetUtil", function () {
+-  var obj = {};
+-  Cu.import("resource://gre/modules/NetUtil.jsm", obj);
+-  return obj.NetUtil;
+-});
+-
+ XPCOMUtils.defineLazyGetter(this, "template", function () {
+   var obj = {};
+   Cu.import("resource:///modules/devtools/Templater.jsm", obj);
+   return obj.template;
+ });
+ 
+ XPCOMUtils.defineLazyGetter(this, "PropertyPanel", function () {
+   var obj = {};
    try {
      Cu.import("resource:///modules/PropertyPanel.jsm", obj);
    } catch (err) {
@@ -1811,7 +1814,17 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
 +  return obj.WebConsoleUtils;
 +});
-+ 
++
++XPCOMUtils.defineLazyGetter(this, "l10n", function() {
++  return WebConsoleUtils.l10n;
++});
++
++XPCOMUtils.defineLazyGetter(this, "NetworkPanel", function () {
++  let obj = {};
++  Cu.import("resource:///modules/NetworkPanel.jsm", obj);
++  return obj.NetworkPanel;
++});
++
  XPCOMUtils.defineLazyGetter(this, "ScratchpadManager", function () {
    var obj = {};
    try {
@@ -1830,21 +1843,43 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -});
 -
 -XPCOMUtils.defineLazyGetter(this, "gConsoleStorage", function () {
-+XPCOMUtils.defineLazyGetter(this, "NetworkHelper", function () {
-   let obj = {};
+-  let obj = {};
 -  Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm", obj);
 -  return obj.ConsoleAPIStorage;
-+  Cu.import("resource:///modules/NetworkHelper.jsm", obj);
-+  return obj.NetworkHelper;
- });
- 
+-});
+-
  function LogFactory(aMessagePrefix)
  {
    function log(aMessage) {
      var _msg = aMessagePrefix + " " + aMessage + "\n";
      dump(_msg);
    }
-@@ -210,33 +208,28 @@ const SEVERITY_LOG = 3;
+   return log;
+ }
+@@ -166,22 +158,16 @@ function loadCommands() {
+   Cu.import("resource:///modules/GcliCommands.jsm", commandExports);
+   Cu.import("resource:///modules/GcliTiltCommands.jsm", commandExports);
+ 
+   return commandExports;
+ }
+ 
+ let log = LogFactory("*** HUDService:");
+ 
+-const HUD_STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+-
+-XPCOMUtils.defineLazyGetter(this, "stringBundle", function () {
+-  return Services.strings.createBundle(HUD_STRINGS_URI);
+-});
+-
+ // The amount of time in milliseconds that must pass between messages to
+ // trigger the display of a new group.
+ const NEW_GROUP_DELAY = 5000;
+ 
+ // The amount of time in milliseconds that we wait before performing a live
+ // search.
+ const SEARCH_DELAY = 200;
+ 
+@@ -210,33 +196,28 @@ const SEVERITY_LOG = 3;
  // severities.
  const LEVELS = {
    error: SEVERITY_ERROR,
@@ -1881,7 +1916,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
  
  // The fragment of a CSS class name that identifies each category.
-@@ -275,320 +268,42 @@ const MESSAGE_PREFERENCE_KEYS = [
+@@ -275,324 +256,43 @@ const MESSAGE_PREFERENCE_KEYS = [
  // Possible directions that can be passed to HUDService.animate().
  const ANIMATE_OUT = 0;
  const ANIMATE_IN = 1;
@@ -1924,7 +1959,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  // The pref prefix for webconsole filters
  const PREFS_PREFIX = "devtools.webconsole.filter.";
  
--/**
+ /**
 - * Implements the nsIStreamListener and nsIRequestObserver interface. Used
 - * within the HS_httpObserverFactory function to get the response body of
 - * requests.
@@ -2196,23 +2231,46 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -  ])
 -}
 -
- ///////////////////////////////////////////////////////////////////////////
- //// Helper for creating the network panel.
- 
- /**
+-///////////////////////////////////////////////////////////////////////////
+-//// Helper for creating the network panel.
+-
+-/**
   * Creates a DOMNode and sets all the attributes of aAttributes on the created
   * element.
   *
   * @param nsIDOMDocument aDocument
-@@ -625,31 +340,16 @@ function createElement(aDocument, aTag, 
-  */
- function createAndAppendElement(aParent, aTag, aAttributes)
- {
-   let node = createElement(aParent.ownerDocument, aTag, aAttributes);
-   aParent.appendChild(node);
+  *        Document to create the new DOMNode.
+  * @param string aTag
+  *        Name of the tag for the DOMNode.
+  * @param object aAttributes
+@@ -606,662 +306,16 @@ function createElement(aDocument, aTag, 
+   if (aAttributes) {
+     for (let attr in aAttributes) {
+       node.setAttribute(attr, aAttributes[attr]);
+     }
+   }
    return node;
  }
  
+-/**
+- * Creates a new DOMNode and appends it to aParent.
+- *
+- * @param nsIDOMNode aParent
+- *        A parent node to append the created element.
+- * @param string aTag
+- *        Name of the tag for the DOMNode.
+- * @param object aAttributes
+- *        Attributes set on the created DOMNode.
+- *
+- * @returns nsIDOMNode
+- */
+-function createAndAppendElement(aParent, aTag, aAttributes)
+-{
+-  let node = createElement(aParent.ownerDocument, aTag, aAttributes);
+-  aParent.appendChild(node);
+-  return node;
+-}
+-
 -/**
 - * Convenience function to unwrap a wrapped object.
 - *
@@ -2228,112 +2286,316 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -  }
 -}
 -
- ///////////////////////////////////////////////////////////////////////////
- //// NetworkPanel
- 
- /**
-  * Creates a new NetworkPanel.
-  *
-  * @param nsIDOMNode aParent
-  *        Parent node to append the created panel to.
-@@ -879,50 +579,51 @@ NetworkPanel.prototype =
-    *        If true, the key-value named "Cookie" is not added to the list.
-    * @returns void
-    */
-   _appendList: function NP_appendList(aParentId, aList, aIgnoreCookie)
-   {
-     let parent = this.document.getElementById(aParentId);
-     let doc = this.document;
- 
+-///////////////////////////////////////////////////////////////////////////
+-//// NetworkPanel
+-
+-/**
+- * Creates a new NetworkPanel.
+- *
+- * @param nsIDOMNode aParent
+- *        Parent node to append the created panel to.
+- * @param object aHttpActivity
+- *        HttpActivity to display in the panel.
+- */
+-function NetworkPanel(aParent, aHttpActivity)
+-{
+-  let doc = aParent.ownerDocument;
+-  this.httpActivity = aHttpActivity;
+-
+-  // Create the underlaying panel
+-  this.panel = createElement(doc, "panel", {
+-    label: HUDService.getStr("NetworkPanel.label"),
+-    titlebar: "normal",
+-    noautofocus: "true",
+-    noautohide: "true",
+-    close: "true"
+-  });
+-
+-  // Create the iframe that displays the NetworkPanel XHTML.
+-  this.iframe = createAndAppendElement(this.panel, "iframe", {
+-    src: "chrome://browser/content/NetworkPanel.xhtml",
+-    type: "content",
+-    flex: "1"
+-  });
+-
+-  let self = this;
+-
+-  // Destroy the panel when it's closed.
+-  this.panel.addEventListener("popuphidden", function onPopupHide() {
+-    self.panel.removeEventListener("popuphidden", onPopupHide, false);
+-    self.panel.parentNode.removeChild(self.panel);
+-    self.panel = null;
+-    self.iframe = null;
+-    self.document = null;
+-    self.httpActivity = null;
+-
+-    if (self.linkNode) {
+-      self.linkNode._panelOpen = false;
+-      self.linkNode = null;
+-    }
+-  }, false);
+-
+-  // Set the document object and update the content once the panel is loaded.
+-  this.panel.addEventListener("load", function onLoad() {
+-    self.panel.removeEventListener("load", onLoad, true);
+-    self.document = self.iframe.contentWindow.document;
+-    self.update();
+-  }, true);
+-
+-  // Create the footer.
+-  let footer = createElement(doc, "hbox", { align: "end" });
+-  createAndAppendElement(footer, "spacer", { flex: 1 });
+-
+-  createAndAppendElement(footer, "resizer", { dir: "bottomend" });
+-  this.panel.appendChild(footer);
+-
+-  aParent.appendChild(this.panel);
+-}
+-
+-NetworkPanel.prototype =
+-{
+-  /**
+-   * Callback is called once the NetworkPanel is processed completly. Used by
+-   * unit tests.
+-   */
+-  isDoneCallback: null,
+-
+-  /**
+-   * The current state of the output.
+-   */
+-  _state: 0,
+-
+-  /**
+-   * State variables.
+-   */
+-  _INIT: 0,
+-  _DISPLAYED_REQUEST_HEADER: 1,
+-  _DISPLAYED_REQUEST_BODY: 2,
+-  _DISPLAYED_RESPONSE_HEADER: 3,
+-  _TRANSITION_CLOSED: 4,
+-
+-  _fromDataRegExp: /Content-Type\:\s*application\/x-www-form-urlencoded/,
+-
+-  /**
+-   * Small helper function that is nearly equal to  HUDService.getFormatStr
+-   * except that it prefixes aName with "NetworkPanel.".
+-   *
+-   * @param string aName
+-   *        The name of an i10n string to format. This string is prefixed with
+-   *        "NetworkPanel." before calling the HUDService.getFormatStr function.
+-   * @param array aArray
+-   *        Values used as placeholder for the i10n string.
+-   * @returns string
+-   *          The i10n formated string.
+-   */
+-  _format: function NP_format(aName, aArray)
+-  {
+-    return HUDService.getFormatStr("NetworkPanel." + aName, aArray);
+-  },
+-
+-  /**
+-   * Returns the content type of the response body. This is based on the
+-   * response.header["Content-Type"] info. If this value is not available, then
+-   * the content type is tried to be estimated by the url file ending.
+-   *
+-   * @returns string or null
+-   *          Content type or null if no content type could be figured out.
+-   */
+-  get _contentType()
+-  {
+-    let response = this.httpActivity.response;
+-    let contentTypeValue = null;
+-
+-    if (response.header && response.header["Content-Type"]) {
+-      let types = response.header["Content-Type"].split(/,|;/);
+-      for (let i = 0; i < types.length; i++) {
+-        let type = NetworkHelper.mimeCategoryMap[types[i]];
+-        if (type) {
+-          return types[i];
+-        }
+-      }
+-    }
+-
+-    // Try to get the content type from the request file extension.
+-    let uri = NetUtil.newURI(this.httpActivity.url);
+-    let mimeType = null;
+-    if ((uri instanceof Ci.nsIURL) && uri.fileExtension) {
+-      try {
+-        mimeType = mimeService.getTypeFromExtension(uri.fileExtension);
+-      } catch(e) {
+-        // Added to prevent failures on OS X 64. No Flash?
+-        Cu.reportError(e);
+-        // Return empty string to pass unittests.
+-        return "";
+-      }
+-    }
+-    return mimeType;
+-  },
+-
+-  /**
+-   *
+-   * @returns boolean
+-   *          True if the response is an image, false otherwise.
+-   */
+-  get _responseIsImage()
+-  {
+-    return NetworkHelper.mimeCategoryMap[this._contentType] == "image";
+-  },
+-
+-  /**
+-   *
+-   * @returns boolean
+-   *          True if the response body contains text, false otherwise.
+-   */
+-  get _isResponseBodyTextData()
+-  {
+-    let contentType = this._contentType;
+-
+-    if (!contentType)
+-      return false;
+-
+-    if (contentType.indexOf("text/") == 0) {
+-      return true;
+-    }
+-
+-    switch (NetworkHelper.mimeCategoryMap[contentType]) {
+-      case "txt":
+-      case "js":
+-      case "json":
+-      case "css":
+-      case "html":
+-      case "svg":
+-      case "xml":
+-        return true;
+-
+-      default:
+-        return false;
+-    }
+-  },
+-
+-  /**
+-   *
+-   * @returns boolean
+-   *          Returns true if the server responded that the request is already
+-   *          in the browser's cache, false otherwise.
+-   */
+-  get _isResponseCached()
+-  {
+-    return this.httpActivity.response.status.indexOf("304") != -1;
+-  },
+-
+-  /**
+-   *
+-   * @returns boolean
+-   *          Returns true if the posted body contains form data.
+-   */
+-  get _isRequestBodyFormData()
+-  {
+-    let requestBody = this.httpActivity.request.body;
+-    return this._fromDataRegExp.test(requestBody);
+-  },
+-
+-  /**
+-   * Appends the node with id=aId by the text aValue.
+-   *
+-   * @param string aId
+-   * @param string aValue
+-   * @returns void
+-   */
+-  _appendTextNode: function NP_appendTextNode(aId, aValue)
+-  {
+-    let textNode = this.document.createTextNode(aValue);
+-    this.document.getElementById(aId).appendChild(textNode);
+-  },
+-
+-  /**
+-   * Generates some HTML to display the key-value pair of the aList data. The
+-   * generated HTML is added to node with id=aParentId.
+-   *
+-   * @param string aParentId
+-   *        Id of the parent node to append the list to.
+-   * @oaram object aList
+-   *        Object that holds the key-value information to display in aParentId.
+-   * @param boolean aIgnoreCookie
+-   *        If true, the key-value named "Cookie" is not added to the list.
+-   * @returns void
+-   */
+-  _appendList: function NP_appendList(aParentId, aList, aIgnoreCookie)
+-  {
+-    let parent = this.document.getElementById(aParentId);
+-    let doc = this.document;
+-
 -    let sortedList = {};
 -    Object.keys(aList).sort().forEach(function(aKey) {
 -      sortedList[aKey] = aList[aKey];
-+    aList.sort(function(a, b) {
-+      return a.name.toLowerCase() < b.name.toLowerCase();
-     });
- 
+-    });
+-
 -    for (let key in sortedList) {
 -      if (aIgnoreCookie && key == "Cookie") {
 -        continue;
 -      }
-+    aList.forEach(function(aItem) {
-+      let name = aItem.name;
-+      let value = aItem.value;
-+      /*if (aIgnoreCookie && name == "Cookie") {
-+        return;
-+      }*/
- 
-       /**
-        * The following code creates the HTML:
-        * <tr>
-        * <th scope="row" class="property-name">${line}:</th>
-        * <td class="property-value">${aList[line]}</td>
-        * </tr>
-        * and adds it to parent.
-        */
-       let row = doc.createElement("tr");
+-
+-      /**
+-       * The following code creates the HTML:
+-       * <tr>
+-       * <th scope="row" class="property-name">${line}:</th>
+-       * <td class="property-value">${aList[line]}</td>
+-       * </tr>
+-       * and adds it to parent.
+-       */
+-      let row = doc.createElement("tr");
 -      let textNode = doc.createTextNode(key + ":");
-+      let textNode = doc.createTextNode(name + ":");
-       let th = doc.createElement("th");
-       th.setAttribute("scope", "row");
-       th.setAttribute("class", "property-name");
-       th.appendChild(textNode);
-       row.appendChild(th);
- 
+-      let th = doc.createElement("th");
+-      th.setAttribute("scope", "row");
+-      th.setAttribute("class", "property-name");
+-      th.appendChild(textNode);
+-      row.appendChild(th);
+-
 -      textNode = doc.createTextNode(sortedList[key]);
-+      textNode = doc.createTextNode(value);
-       let td = doc.createElement("td");
-       td.setAttribute("class", "property-value");
-       td.appendChild(textNode);
-       row.appendChild(td);
- 
-       parent.appendChild(row);
+-      let td = doc.createElement("td");
+-      td.setAttribute("class", "property-value");
+-      td.appendChild(textNode);
+-      row.appendChild(td);
+-
+-      parent.appendChild(row);
 -    }
-+    });
-   },
- 
-   /**
-    * Displays the node with id=aId.
-    *
-    * @param string aId
-    * @returns void
-    */
-@@ -937,39 +638,33 @@ NetworkPanel.prototype =
-    * If the request header contains cookie data, a list of sent cookies is
-    * generated and a special sent cookie section is displayed + the cookie list
-    * added to it.
-    *
-    * @returns void
-    */
-   _displayRequestHeader: function NP_displayRequestHeader()
-   {
+-  },
+-
+-  /**
+-   * Displays the node with id=aId.
+-   *
+-   * @param string aId
+-   * @returns void
+-   */
+-  _displayNode: function NP_displayNode(aId)
+-  {
+-    this.document.getElementById(aId).style.display = "block";
+-  },
+-
+-  /**
+-   * Sets the request URL, request method, the timing information when the
+-   * request started and the request header content on the NetworkPanel.
+-   * If the request header contains cookie data, a list of sent cookies is
+-   * generated and a special sent cookie section is displayed + the cookie list
+-   * added to it.
+-   *
+-   * @returns void
+-   */
+-  _displayRequestHeader: function NP_displayRequestHeader()
+-  {
 -    let timing = this.httpActivity.timing;
 -    let request = this.httpActivity.request;
 -
 -    this._appendTextNode("headUrl", this.httpActivity.url);
 -    this._appendTextNode("headMethod", this.httpActivity.method);
 -
-+    let entry = this.httpActivity.log.entries[0];
-+    let timing = entry.timings;
-+    let request = entry.request;
-+    // FIXME
-+    let requestTime = WebConsoleUtils.
-+                      convertISO8601toMilliseconds(entry.startedDateTime);
-+
-+    this._appendTextNode("headUrl", request.url);
-+    this._appendTextNode("headMethod", request.method);
-     this._appendTextNode("requestHeadersInfo",
+-    this._appendTextNode("requestHeadersInfo",
 -      ConsoleUtils.timestampString(timing.REQUEST_HEADER/1000));
 -
 -    this._appendList("requestHeadersContent", request.header, true);
 -
 -    if ("Cookie" in request.header) {
-+                         ConsoleUtils.timestampString(requestTime));
-+
-+    this._appendList("requestHeadersContent", request.headers, true);
-+
-+    if (request.cookies.length > 0) {
-       this._displayNode("requestCookie");
+-      this._displayNode("requestCookie");
 -
 -      let cookies = request.header.Cookie.split(";");
 -      let cookieList = {};
@@ -2344,24 +2606,63 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -        cookieList[name] = value;
 -      });
 -      this._appendList("requestCookieContent", cookieList);
-+      this._appendList("requestCookieContent", request.cookies);
-     }
-   },
- 
-   /**
-    * Displays the request body section of the NetworkPanel and set the request
-    * body content on the NetworkPanel.
-    *
-    * @returns void
-@@ -1017,28 +712,30 @@ NetworkPanel.prototype =
-    * Displays the response section of the NetworkPanel, sets the response status,
-    * the duration between the start of the request and the receiving of the
-    * response header as well as the response header content on the the NetworkPanel.
-    *
-    * @returns void
-    */
-   _displayResponseHeader: function NP_displayResponseHeader()
-   {
+-    }
+-  },
+-
+-  /**
+-   * Displays the request body section of the NetworkPanel and set the request
+-   * body content on the NetworkPanel.
+-   *
+-   * @returns void
+-   */
+-  _displayRequestBody: function NP_displayRequestBody() {
+-    this._displayNode("requestBody");
+-    this._appendTextNode("requestBodyContent", this.httpActivity.request.body);
+-  },
+-
+-  /*
+-   * Displays the `sent form data` section. Parses the request header for the
+-   * submitted form data displays it inside of the `sent form data` section.
+-   *
+-   * @returns void
+-   */
+-  _displayRequestForm: function NP_processRequestForm() {
+-    let requestBodyLines = this.httpActivity.request.body.split("\n");
+-    let formData = requestBodyLines[requestBodyLines.length - 1].
+-                      replace(/\+/g, " ").split("&");
+-
+-    function unescapeText(aText)
+-    {
+-      try {
+-        return decodeURIComponent(aText);
+-      }
+-      catch (ex) {
+-        return decodeURIComponent(unescape(aText));
+-      }
+-    }
+-
+-    let formDataObj = {};
+-    for (let i = 0; i < formData.length; i++) {
+-      let data = formData[i];
+-      let idx = data.indexOf("=");
+-      let key = data.substring(0, idx);
+-      let value = data.substring(idx + 1);
+-      formDataObj[unescapeText(key)] = unescapeText(value);
+-    }
+-
+-    this._appendList("requestFormDataContent", formDataObj);
+-    this._displayNode("requestFormData");
+-  },
+-
+-  /**
+-   * Displays the response section of the NetworkPanel, sets the response status,
+-   * the duration between the start of the request and the receiving of the
+-   * response header as well as the response header content on the the NetworkPanel.
+-   *
+-   * @returns void
+-   */
+-  _displayResponseHeader: function NP_displayResponseHeader()
+-  {
 -    let timing = this.httpActivity.timing;
 -    let response = this.httpActivity.response;
 -
@@ -2369,82 +2670,243 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -
 -    let deltaDuration =
 -      Math.round((timing.RESPONSE_HEADER - timing.REQUEST_HEADER) / 1000);
-+    let entry = this.httpActivity.log.entries[0];
-+    let timing = entry.timings;
-+    let response = entry.response;
-+
-+    this._appendTextNode("headStatus", response.httpVersion + " " +
-+                                       response.status + " " +
-+                                       response.statusText);
-+
-+    let deltaDuration = timing.sent + timing.wait;
-     this._appendTextNode("responseHeadersInfo",
-       this._format("durationMS", [deltaDuration]));
- 
-     this._displayNode("responseContainer");
+-    this._appendTextNode("responseHeadersInfo",
+-      this._format("durationMS", [deltaDuration]));
+-
+-    this._displayNode("responseContainer");
 -    this._appendList("responseHeadersContent", response.header);
-+    this._appendList("responseHeadersContent", response.headers);
-   },
- 
-   /**
-    * Displays the respones image section, sets the source of the image displayed
-    * in the image response section to the request URL and the duration between
-    * the receiving of the response header and the end of the request. Once the
-    * image is loaded, the size of the requested image is set.
-    *
-@@ -1170,45 +867,47 @@ NetworkPanel.prototype =
-      * After the iframe's contentWindow is ready, the document object is set.
-      * If the document object isn't set yet, then the page is loaded and nothing
-      * can be updated.
-      */
-     if (!this.document) {
-       return;
-     }
- 
+-  },
+-
+-  /**
+-   * Displays the respones image section, sets the source of the image displayed
+-   * in the image response section to the request URL and the duration between
+-   * the receiving of the response header and the end of the request. Once the
+-   * image is loaded, the size of the requested image is set.
+-   *
+-   * @returns void
+-   */
+-  _displayResponseImage: function NP_displayResponseImage()
+-  {
+-    let self = this;
+-    let timing = this.httpActivity.timing;
+-    let response = this.httpActivity.response;
+-    let cached = "";
+-
+-    if (this._isResponseCached) {
+-      cached = "Cached";
+-    }
+-
+-    let imageNode = this.document.getElementById("responseImage" + cached +"Node");
+-    imageNode.setAttribute("src", this.httpActivity.url);
+-
+-    // This function is called to set the imageInfo.
+-    function setImageInfo() {
+-      let deltaDuration =
+-        Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
+-      self._appendTextNode("responseImage" + cached + "Info",
+-        self._format("imageSizeDeltaDurationMS", [
+-          imageNode.width, imageNode.height, deltaDuration
+-        ]
+-      ));
+-    }
+-
+-    // Check if the image is already loaded.
+-    if (imageNode.width != 0) {
+-      setImageInfo();
+-    }
+-    else {
+-      // Image is not loaded yet therefore add a load event.
+-      imageNode.addEventListener("load", function imageNodeLoad() {
+-        imageNode.removeEventListener("load", imageNodeLoad, false);
+-        setImageInfo();
+-      }, false);
+-    }
+-
+-    this._displayNode("responseImage" + cached);
+-  },
+-
+-  /**
+-   * Displays the response body section, sets the the duration between
+-   * the receiving of the response header and the end of the request as well as
+-   * the content of the response body on the NetworkPanel.
+-   *
+-   * @param [optional] string aCachedContent
+-   *        Cached content for this request. If this argument is set, the
+-   *        responseBodyCached section is displayed.
+-   * @returns void
+-   */
+-  _displayResponseBody: function NP_displayResponseBody(aCachedContent)
+-  {
+-    let timing = this.httpActivity.timing;
+-    let response = this.httpActivity.response;
+-    let cached =  "";
+-    if (aCachedContent) {
+-      cached = "Cached";
+-    }
+-
+-    let deltaDuration =
+-      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
+-    this._appendTextNode("responseBody" + cached + "Info",
+-      this._format("durationMS", [deltaDuration]));
+-
+-    this._displayNode("responseBody" + cached);
+-    this._appendTextNode("responseBody" + cached + "Content",
+-                            aCachedContent || response.body);
+-  },
+-
+-  /**
+-   * Displays the `Unknown Content-Type hint` and sets the duration between the
+-   * receiving of the response header on the NetworkPanel.
+-   *
+-   * @returns void
+-   */
+-  _displayResponseBodyUnknownType: function NP_displayResponseBodyUnknownType()
+-  {
+-    let timing = this.httpActivity.timing;
+-
+-    this._displayNode("responseBodyUnknownType");
+-    let deltaDuration =
+-      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
+-    this._appendTextNode("responseBodyUnknownTypeInfo",
+-      this._format("durationMS", [deltaDuration]));
+-
+-    this._appendTextNode("responseBodyUnknownTypeContent",
+-      this._format("responseBodyUnableToDisplay.content", [this._contentType]));
+-  },
+-
+-  /**
+-   * Displays the `no response body` section and sets the the duration between
+-   * the receiving of the response header and the end of the request.
+-   *
+-   * @returns void
+-   */
+-  _displayNoResponseBody: function NP_displayNoResponseBody()
+-  {
+-    let timing = this.httpActivity.timing;
+-
+-    this._displayNode("responseNoBody");
+-    let deltaDuration =
+-      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
+-    this._appendTextNode("responseNoBodyInfo",
+-      this._format("durationMS", [deltaDuration]));
+-  },
+-
+-  /*
+-   * Calls the isDoneCallback function if one is specified.
+-   */
+-  _callIsDone: function() {
+-    if (this.isDoneCallback) {
+-      this.isDoneCallback();
+-    }
+-  },
+-
+-  /**
+-   * Updates the content of the NetworkPanel's iframe.
+-   *
+-   * @returns void
+-   */
+-  update: function NP_update()
+-  {
+-    /**
+-     * After the iframe's contentWindow is ready, the document object is set.
+-     * If the document object isn't set yet, then the page is loaded and nothing
+-     * can be updated.
+-     */
+-    if (!this.document) {
+-      return;
+-    }
+-
 -    let timing = this.httpActivity.timing;
 -    let request = this.httpActivity.request;
 -    let response = this.httpActivity.response;
-+    let entry = this.httpActivity.log.entries[0];
-+    let timing = entry.timings;
-+    let request = entry.request;
-+    let response = entry.response;
- 
-     switch (this._state) {
-       case this._INIT:
-         this._displayRequestHeader();
-         this._state = this._DISPLAYED_REQUEST_HEADER;
-         // FALL THROUGH
- 
-       case this._DISPLAYED_REQUEST_HEADER:
-         // Process the request body if there is one.
-+        // FIXME
-         if (!request.bodyDiscarded && request.body) {
-           // Check if we send some form data. If so, display the form data special.
-           if (this._isRequestBodyFormData) {
-             this._displayRequestForm();
-           }
-           else {
-             this._displayRequestBody();
-           }
-           this._state = this._DISPLAYED_REQUEST_BODY;
-         }
-         // FALL THROUGH
- 
-       case this._DISPLAYED_REQUEST_BODY:
-         // There is always a response header. Therefore we can skip here if
-         // we don't have a response header yet and don't have to try updating
-         // anything else in the NetworkPanel.
+-
+-    switch (this._state) {
+-      case this._INIT:
+-        this._displayRequestHeader();
+-        this._state = this._DISPLAYED_REQUEST_HEADER;
+-        // FALL THROUGH
+-
+-      case this._DISPLAYED_REQUEST_HEADER:
+-        // Process the request body if there is one.
+-        if (!request.bodyDiscarded && request.body) {
+-          // Check if we send some form data. If so, display the form data special.
+-          if (this._isRequestBodyFormData) {
+-            this._displayRequestForm();
+-          }
+-          else {
+-            this._displayRequestBody();
+-          }
+-          this._state = this._DISPLAYED_REQUEST_BODY;
+-        }
+-        // FALL THROUGH
+-
+-      case this._DISPLAYED_REQUEST_BODY:
+-        // There is always a response header. Therefore we can skip here if
+-        // we don't have a response header yet and don't have to try updating
+-        // anything else in the NetworkPanel.
 -        if (!response.header) {
-+        if (!response.headers) {
-           break
-         }
-         this._displayResponseHeader();
-         this._state = this._DISPLAYED_RESPONSE_HEADER;
-         // FALL THROUGH
+-          break
+-        }
+-        this._displayResponseHeader();
+-        this._state = this._DISPLAYED_RESPONSE_HEADER;
+-        // FALL THROUGH
+-
+-      case this._DISPLAYED_RESPONSE_HEADER:
+-        // Check if the transition is done.
+-        if (timing.TRANSACTION_CLOSE && response.isDone) {
+-          if (response.bodyDiscarded) {
+-            this._callIsDone();
+-          }
+-          else if (this._responseIsImage) {
+-            this._displayResponseImage();
+-            this._callIsDone();
+-          }
+-          else if (!this._isResponseBodyTextData) {
+-            this._displayResponseBodyUnknownType();
+-            this._callIsDone();
+-          }
+-          else if (response.body) {
+-            this._displayResponseBody();
+-            this._callIsDone();
+-          }
+-          else if (this._isResponseCached) {
+-            let self = this;
+-            NetworkHelper.loadFromCache(this.httpActivity.url,
+-                                        this.httpActivity.charset,
+-                                        function(aContent) {
+-              // If some content could be loaded from the cache, then display
+-              // the body.
+-              if (aContent) {
+-                self._displayResponseBody(aContent);
+-                self._callIsDone();
+-              }
+-              // Otherwise, show the "There is no response body" hint.
+-              else {
+-                self._displayNoResponseBody();
+-                self._callIsDone();
+-              }
+-            });
+-          }
+-          else {
+-            this._displayNoResponseBody();
+-            this._callIsDone();
+-          }
+-          this._state = this._TRANSITION_CLOSED;
+-        }
+-        break;
+-    }
+-  }
+-}
+-
+ ///////////////////////////////////////////////////////////////////////////
+ //// Private utility functions for the HUD service
  
-       case this._DISPLAYED_RESPONSE_HEADER:
-         // Check if the transition is done.
-@@ -1289,29 +988,34 @@ function pruneConsoleOutputIfNecessary(a
+ /**
+  * Ensures that the number of message nodes of type aCategory don't exceed that
+  * category's line limit by removing old messages as needed.
+  *
+  * @param aHUDId aHUDId
+@@ -1289,29 +343,34 @@ function pruneConsoleOutputIfNecessary(a
    let oldScrollHeight = scrollBox.scrollHeight;
    let scrolledToBottom = ConsoleUtils.isOutputScrolledToBottom(outputNode);
  
@@ -2486,7 +2948,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    }
  
    return logLimit;
-@@ -1335,51 +1039,32 @@ function HUD_SERVICE()
+@@ -1335,278 +394,157 @@ function HUD_SERVICE()
    // These methods access the "this" object, but they're registered as
    // event listeners. So we hammer in the "this" binding.
    this.onTabClose = this.onTabClose.bind(this);
@@ -2540,7 +3002,37 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Last value entered
     */
    lastInputValue: "",
-@@ -1417,196 +1102,116 @@ HUD_SERVICE.prototype =
+ 
+   /**
+-   * L10N shortcut function
+-   *
+-   * @param string aName
+-   * @returns string
+-   */
+-  getStr: function HS_getStr(aName)
+-  {
+-    return stringBundle.GetStringFromName(aName);
+-  },
+-
+-  /**
+-   * L10N shortcut function
+-   *
+-   * @param string aName
+-   * @returns (format) string
+-   */
+-  getFormatStr: function HS_getFormatStr(aName, aArray)
+-  {
+-    return stringBundle.formatStringFromName(aName, aArray, aArray.length);
+-  },
+-
+-  /**
+    * getter for UI commands to be used by the frontend
+    *
+    * @returns object
+    */
+   get consoleUI() {
+     return HeadsUpDisplayUICommands;
+   },
  
    /**
     * The sequencer is a generator (after initialization) that returns unique
@@ -2787,7 +3279,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        procInstr.contexts = procInstr.contexts.filter(function(id) {
          return id !== hudId;
        });
-@@ -1808,28 +1413,16 @@ HUD_SERVICE.prototype =
+@@ -1808,28 +746,16 @@ HUD_SERVICE.prototype =
          node.classList.add("hud-filtered-by-string");
        }
      }
@@ -2816,7 +3308,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    {
      // register a display DOM node Id with the service.
      if (!aHUDId){
-@@ -1855,26 +1448,16 @@ HUD_SERVICE.prototype =
+@@ -1855,26 +781,16 @@ HUD_SERVICE.prototype =
     * @param string aHUDId
     *        The ID of a HUD.
     * @returns void
@@ -2843,7 +3335,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Remove the HUDBox and the consolePanel if the Web Console is inside a
      // floating panel.
-@@ -1885,30 +1468,24 @@ HUD_SERVICE.prototype =
+@@ -1885,30 +801,24 @@ HUD_SERVICE.prototype =
      }
  
      hud.HUDBox.parentNode.removeChild(hud.HUDBox);
@@ -2874,7 +3366,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      let id = ConsoleUtils.supString(aHUDId);
      Services.obs.notifyObservers(id, "web-console-destroyed", null);
-@@ -1931,59 +1508,41 @@ HUD_SERVICE.prototype =
+@@ -1931,59 +841,41 @@ HUD_SERVICE.prototype =
     * @returns void
     */
    wakeup: function HS_wakeup()
@@ -2941,7 +3433,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param nsIDOMWindow aContentWindow
     * @returns object
-@@ -1998,17 +1557,17 @@ HUD_SERVICE.prototype =
+@@ -1998,17 +890,17 @@ HUD_SERVICE.prototype =
     * Returns the hudId that is corresponding to the hud activated for the
     * passed aContentWindow. If there is no matching hudId null is returned.
     *
@@ -2960,7 +3452,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param string aId
     * @returns Object
-@@ -2062,50 +1621,36 @@ HUD_SERVICE.prototype =
+@@ -2062,55 +954,41 @@ HUD_SERVICE.prototype =
     * @param object aMessage
     *        The message reported by the console service.
     * @return void
@@ -3010,14 +3502,21 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -        let filename = ConsoleUtils.abbreviateSourceURL(args[0].filename);
 +        let filename = WebConsoleUtils.abbreviateSourceURL(args[0].filename);
          let functionName = args[0].functionName ||
-                            this.getStr("stacktrace.anonymousFunction");
+-                           this.getStr("stacktrace.anonymousFunction");
++                           l10n.getStr("stacktrace.anonymousFunction");
          let lineNumber = args[0].lineNumber;
  
-         body = this.getFormatStr("stacktrace.outputMessage",
+-        body = this.getFormatStr("stacktrace.outputMessage",
++        body = l10n.getFormatStr("stacktrace.outputMessage",
                                   [filename, functionName, lineNumber]);
  
          sourceURL = args[0].filename;
-@@ -2118,27 +1663,33 @@ HUD_SERVICE.prototype =
+         sourceLine = args[0].lineNumber;
+ 
+         clipboardText = "";
+ 
+         args.forEach(function(aFrame) {
+@@ -2118,58 +996,64 @@ HUD_SERVICE.prototype =
                             aFrame.functionName + " :: " +
                             aFrame.lineNumber + "\n";
          });
@@ -3057,14 +3556,18 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
            hud.groupDepth--;
          }
          return;
-@@ -2148,28 +1699,28 @@ HUD_SERVICE.prototype =
+ 
+       case "time":
+         if (!args) {
            return;
          }
          if (args.error) {
-           Cu.reportError(this.getStr(args.error));
+-          Cu.reportError(this.getStr(args.error));
++          Cu.reportError(l10n.getStr(args.error));
            return;
          }
-         body = this.getFormatStr("timerStarted", [args.name]);
+-        body = this.getFormatStr("timerStarted", [args.name]);
++        body = l10n.getFormatStr("timerStarted", [args.name]);
          clipboardText = body;
 -        sourceURL = aMessage.filename;
 -        sourceLine = aMessage.lineNumber;
@@ -3076,7 +3579,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          if (!args) {
            return;
          }
-         body = this.getFormatStr("timeEnd", [args.name, args.duration]);
+-        body = this.getFormatStr("timeEnd", [args.name, args.duration]);
++        body = l10n.getFormatStr("timeEnd", [args.name, args.duration]);
          clipboardText = body;
 -        sourceURL = aMessage.filename;
 -        sourceLine = aMessage.lineNumber;
@@ -3090,7 +3594,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }
  
      let node = ConsoleUtils.createMessageNode(hud.outputNode.ownerDocument,
-@@ -2181,52 +1732,41 @@ HUD_SERVICE.prototype =
+@@ -2181,83 +1065,73 @@ HUD_SERVICE.prototype =
                                                sourceLine,
                                                clipboardText,
                                                level,
@@ -3157,7 +3661,21 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * in a content page.
     *
     * @param string aHUDId
-@@ -2247,17 +1787,18 @@ HUD_SERVICE.prototype =
+    *        The ID of the Web Console to which to send the message.
+    * @return void
+    */
+   logWarningAboutReplacedAPI:
+   function HS_logWarningAboutReplacedAPI(aHUDId)
+   {
+     let hud = this.hudReferences[aHUDId];
+     let chromeDocument = hud.HUDBox.ownerDocument;
+-    let message = stringBundle.GetStringFromName("ConsoleAPIDisabled");
++    let message = l10n.getStr("ConsoleAPIDisabled");
+     let node = ConsoleUtils.createMessageNode(chromeDocument, CATEGORY_JS,
+                                               SEVERITY_WARNING, message,
+                                               aHUDId);
+     ConsoleUtils.outputMessageNode(node, aHUDId);
+   },
  
    /**
     * Reports an error in the page source, either JavaScript or CSS.
@@ -3177,7 +3695,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let category;
  
      switch (aScriptError.category) {
-@@ -2285,36 +1826,28 @@ HUD_SERVICE.prototype =
+@@ -2285,36 +1159,28 @@ HUD_SERVICE.prototype =
      // Warnings and legacy strict errors become warnings; other types become
      // errors.
      let severity = SEVERITY_ERROR;
@@ -3226,7 +3744,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @returns void or throws "UNSUPPORTED APPLICATION" error
     */
    registerApplicationHooks:
-@@ -2332,476 +1865,111 @@ HUD_SERVICE.prototype =
+@@ -2332,473 +1198,107 @@ HUD_SERVICE.prototype =
    /**
     * Registry of ApplicationHooks used by specified Gecko Apps
     *
@@ -3687,21 +4205,10 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
                                                       clipboardText);
 -
 -    ConsoleUtils.outputMessageNode(messageNode, aActivityObject.hudId);
-+    messageNode.setAttribute("connectionId", aMessage.log.entries[0].connection);
-+
-+    messageNode._httpActivity = aMessage;
-+
-+    hud.makeOutputMessageLink(messageNode, function() {
-+      if (!messageNode._panelOpen) {
-+        this.openNetworkPanel(messageNode);
-+      }
-+    }.bind(this));
-+
-+    ConsoleUtils.outputMessageNode(messageNode, aMessage.hudId);
-     return messageNode;
-   },
- 
-   /**
+-    return messageNode;
+-  },
+-
+-  /**
 -   * Initialize the JSTerm object to create a JS Workspace by attaching the UI
 -   * into the given parent node, using the mixin.
 -   *
@@ -3722,18 +4229,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -
 -    // TODO: injection of additional functionality needs re-thinking/api
 -    // see bug 559748
--  },
--
--  /**
++    messageNode.setAttribute("connectionId", aMessage.log.entries[0].connection);
++
++    messageNode._httpActivity = aMessage;
++
++    hud.makeOutputMessageLink(messageNode, function() {
++      if (!messageNode._panelOpen) {
++        this.openNetworkPanel(messageNode);
++      }
++    }.bind(this));
++
++    ConsoleUtils.outputMessageNode(messageNode, aMessage.hudId);
+   },
+ 
+   /**
     * Creates a generator that always returns a unique number for use in the
     * indexes
     *
     * @returns Generator
     */
-   createSequencer: function HS_createSequencer(aInt)
-   {
-     function sequencer(aInt)
-@@ -2870,137 +2038,34 @@ HUD_SERVICE.prototype =
+@@ -2870,137 +1370,34 @@ HUD_SERVICE.prototype =
      tabContainer.removeEventListener("TabClose", this.onTabClose, false);
  
      let tab = tabContainer.firstChild;
@@ -3875,7 +4390,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Animates the Console appropriately.
-@@ -3055,18 +2120,18 @@ HUD_SERVICE.prototype =
+@@ -3055,18 +1452,18 @@ HUD_SERVICE.prototype =
    /**
     * Reset the height of the Web Console.
     *
@@ -3896,7 +4411,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }
  
      let boxStyle = chromeWindow.getComputedStyle(HUD.HUDBox, null);
-@@ -3151,169 +2216,76 @@ HUD_SERVICE.prototype =
+@@ -3151,169 +1548,76 @@ HUD_SERVICE.prototype =
      clipboardHelper.copyString(strings.join("\n"));
    }
  };
@@ -4097,14 +4612,57 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      if (this.uiInOwnWindow) {
        return this.consolePanel;
      }
-@@ -3589,58 +2561,25 @@ HeadsUpDisplay.prototype = {
+@@ -3460,17 +1764,17 @@ HeadsUpDisplay.prototype = {
+   /**
+    * Retrieve the Web Console panel title.
+    *
+    * @return string
+    *         The Web Console panel title.
     */
-   getFormatStr: function HUD_getFormatStr(aName, aArray)
+   getPanelTitle: function HUD_getPanelTitle()
    {
-     return stringBundle.formatStringFromName(aName, aArray, aArray.length);
+-    return this.getFormatStr("webConsoleWindowTitleAndURL", [this.uriSpec]);
++    return l10n.getFormatStr("webConsoleWindowTitleAndURL", [this.uriSpec]);
+   },
+ 
+   positions: {
+     above: 0, // the childNode index
+     below: 2,
+     window: null
+   },
+ 
+@@ -3565,82 +1869,26 @@ HeadsUpDisplay.prototype = {
+       this.jsterm.inputNode.focus();
+     }
+     if (this.gcliterm) {
+       this.gcliterm.inputNode.focus();
+     }
    },
  
    /**
+-   * L10N shortcut function
+-   *
+-   * @param string aName
+-   * @returns string
+-   */
+-  getStr: function HUD_getStr(aName)
+-  {
+-    return stringBundle.GetStringFromName(aName);
+-  },
+-
+-  /**
+-   * L10N shortcut function
+-   *
+-   * @param string aName
+-   * @param array aArray
+-   * @returns string
+-   */
+-  getFormatStr: function HUD_getFormatStr(aName, aArray)
+-  {
+-    return stringBundle.formatStringFromName(aName, aArray, aArray.length);
+-  },
+-
+-  /**
     * The JSTerm object that contains the console's inputNode
 -   *
     */
@@ -4158,7 +4716,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    displayCachedConsoleMessages: function HUD_displayCachedConsoleMessages()
    {
-@@ -3684,45 +2623,16 @@ HeadsUpDisplay.prototype = {
+@@ -3684,45 +1932,16 @@ HeadsUpDisplay.prototype = {
      if (numChildren && this.outputNode.clientHeight) {
        // We also check the clientHeight to force a reflow, otherwise
        // ensureIndexIsVisible() does not work after outputNode.hidden = false.
@@ -4204,7 +4762,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    makeXULNode:
    function HUD_makeXULNode(aTag)
    {
-@@ -3731,37 +2641,34 @@ HeadsUpDisplay.prototype = {
+@@ -3731,45 +1950,42 @@ HeadsUpDisplay.prototype = {
  
    /**
     * Build the UI of each HeadsUpDisplay
@@ -4244,8 +4802,17 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.filterBox = this.makeXULNode("textbox");
      this.filterBox.setAttribute("class", "compact hud-filter-box");
      this.filterBox.setAttribute("hudId", this.hudId);
-     this.filterBox.setAttribute("placeholder", this.getStr("stringFilter"));
-@@ -3797,24 +2704,24 @@ HeadsUpDisplay.prototype = {
+-    this.filterBox.setAttribute("placeholder", this.getStr("stringFilter"));
++    this.filterBox.setAttribute("placeholder", l10n.getStr("stringFilter"));
+     this.filterBox.setAttribute("type", "search");
+ 
+     this.setFilterTextBoxEvents();
+ 
+     this.createConsoleMenu(this.consoleWrap);
+ 
+     this.filterPrefs = HUDService.getDefaultFilterPrefs(this.hudId);
+ 
+@@ -3797,24 +2013,24 @@ HeadsUpDisplay.prototype = {
      this.outputNode.setAttribute("orient", "vertical");
      this.outputNode.setAttribute("context", this.hudId + "-output-contextmenu");
      this.outputNode.setAttribute("style", "direction: ltr;");
@@ -4275,7 +4842,149 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * sets the click events for all binary toggle filter buttons
     *
-@@ -4166,28 +3073,16 @@ HeadsUpDisplay.prototype = {
+@@ -3937,38 +2153,38 @@ HeadsUpDisplay.prototype = {
+       this.positionConsole("below");
+     }).bind(this);
+     this._positionConsoleWindow = (function HUD_positionWindow() {
+       this.positionConsole("window");
+     }).bind(this);
+ 
+     let button = this.makeXULNode("toolbarbutton");
+     button.setAttribute("type", "menu");
+-    button.setAttribute("label", this.getStr("webConsolePosition"));
+-    button.setAttribute("tooltip", this.getStr("webConsolePositionTooltip"));
++    button.setAttribute("label", l10n.getStr("webConsolePosition"));
++    button.setAttribute("tooltip", l10n.getStr("webConsolePositionTooltip"));
+ 
+     let menuPopup = this.makeXULNode("menupopup");
+     button.appendChild(menuPopup);
+ 
+     let itemAbove = this.makeXULNode("menuitem");
+-    itemAbove.setAttribute("label", this.getStr("webConsolePositionAbove"));
++    itemAbove.setAttribute("label", l10n.getStr("webConsolePositionAbove"));
+     itemAbove.setAttribute("type", "checkbox");
+     itemAbove.setAttribute("autocheck", "false");
+     itemAbove.addEventListener("command", this._positionConsoleAbove, false);
+     menuPopup.appendChild(itemAbove);
+ 
+     let itemBelow = this.makeXULNode("menuitem");
+-    itemBelow.setAttribute("label", this.getStr("webConsolePositionBelow"));
++    itemBelow.setAttribute("label", l10n.getStr("webConsolePositionBelow"));
+     itemBelow.setAttribute("type", "checkbox");
+     itemBelow.setAttribute("autocheck", "false");
+     itemBelow.addEventListener("command", this._positionConsoleBelow, false);
+     menuPopup.appendChild(itemBelow);
+ 
+     let itemWindow = this.makeXULNode("menuitem");
+-    itemWindow.setAttribute("label", this.getStr("webConsolePositionWindow"));
++    itemWindow.setAttribute("label", l10n.getStr("webConsolePositionWindow"));
+     itemWindow.setAttribute("type", "checkbox");
+     itemWindow.setAttribute("autocheck", "false");
+     itemWindow.addEventListener("command", this._positionConsoleWindow, false);
+     menuPopup.appendChild(itemWindow);
+ 
+     this.positionMenuitems = {
+       last: null,
+       above: itemAbove,
+@@ -3991,38 +2207,38 @@ HeadsUpDisplay.prototype = {
+     let id = this.hudId + "-output-contextmenu";
+     menuPopup.setAttribute("id", id);
+     menuPopup.addEventListener("popupshowing", function() {
+       saveBodiesItem.setAttribute("checked",
+         HUDService.saveRequestAndResponseBodies);
+     }, true);
+ 
+     let saveBodiesItem = this.makeXULNode("menuitem");
+-    saveBodiesItem.setAttribute("label", this.getStr("saveBodies.label"));
++    saveBodiesItem.setAttribute("label", l10n.getStr("saveBodies.label"));
+     saveBodiesItem.setAttribute("accesskey",
+-                                 this.getStr("saveBodies.accesskey"));
++                                 l10n.getStr("saveBodies.accesskey"));
+     saveBodiesItem.setAttribute("type", "checkbox");
+     saveBodiesItem.setAttribute("buttonType", "saveBodies");
+     saveBodiesItem.setAttribute("oncommand", "HUDConsoleUI.command(this);");
+     menuPopup.appendChild(saveBodiesItem);
+ 
+     menuPopup.appendChild(this.makeXULNode("menuseparator"));
+ 
+     let copyItem = this.makeXULNode("menuitem");
+-    copyItem.setAttribute("label", this.getStr("copyCmd.label"));
+-    copyItem.setAttribute("accesskey", this.getStr("copyCmd.accesskey"));
++    copyItem.setAttribute("label", l10n.getStr("copyCmd.label"));
++    copyItem.setAttribute("accesskey", l10n.getStr("copyCmd.accesskey"));
+     copyItem.setAttribute("key", "key_copy");
+     copyItem.setAttribute("command", "cmd_copy");
+     copyItem.setAttribute("buttonType", "copy");
+     menuPopup.appendChild(copyItem);
+ 
+     let selectAllItem = this.makeXULNode("menuitem");
+-    selectAllItem.setAttribute("label", this.getStr("selectAllCmd.label"));
++    selectAllItem.setAttribute("label", l10n.getStr("selectAllCmd.label"));
+     selectAllItem.setAttribute("accesskey",
+-                               this.getStr("selectAllCmd.accesskey"));
++                               l10n.getStr("selectAllCmd.accesskey"));
+     selectAllItem.setAttribute("hudId", this.hudId);
+     selectAllItem.setAttribute("buttonType", "selectAll");
+     selectAllItem.setAttribute("oncommand", "HUDConsoleUI.command(this);");
+     menuPopup.appendChild(selectAllItem);
+ 
+     aConsoleWrapper.appendChild(menuPopup);
+     aConsoleWrapper.setAttribute("context", id);
+   },
+@@ -4043,30 +2259,30 @@ HeadsUpDisplay.prototype = {
+     let toolbarButton = this.makeXULNode("toolbarbutton");
+     aParent.appendChild(toolbarButton);
+ 
+     let toggleFilter = HeadsUpDisplayUICommands.toggleFilter;
+     toolbarButton.addEventListener("click", toggleFilter, false);
+ 
+     let name = aDescriptor.name;
+     toolbarButton.setAttribute("type", "menu-button");
+-    toolbarButton.setAttribute("label", this.getStr("btn" + name));
+-    toolbarButton.setAttribute("tooltip", this.getStr("tip" + name));
++    toolbarButton.setAttribute("label", l10n.getStr("btn" + name));
++    toolbarButton.setAttribute("tooltip", l10n.getStr("tip" + name));
+     toolbarButton.setAttribute("category", aDescriptor.category);
+     toolbarButton.setAttribute("hudId", this.hudId);
+     toolbarButton.classList.add("webconsole-filter-button");
+ 
+     let menuPopup = this.makeXULNode("menupopup");
+     toolbarButton.appendChild(menuPopup);
+ 
+     let someChecked = false;
+     for (let i = 0; i < aDescriptor.severities.length; i++) {
+       let severity = aDescriptor.severities[i];
+       let menuItem = this.makeXULNode("menuitem");
+-      menuItem.setAttribute("label", this.getStr("btn" + severity.name));
++      menuItem.setAttribute("label", l10n.getStr("btn" + severity.name));
+       menuItem.setAttribute("type", "checkbox");
+       menuItem.setAttribute("autocheck", "false");
+       menuItem.setAttribute("hudId", this.hudId);
+ 
+       let prefKey = severity.prefKey;
+       menuItem.setAttribute("prefKey", prefKey);
+ 
+       let checked = this.filterPrefs[prefKey];
+@@ -4123,17 +2339,17 @@ HeadsUpDisplay.prototype = {
+         hud.jsterm.clearOutput(true);
+       }
+       if (hud.gcliterm) {
+         hud.gcliterm.clearOutput();
+       }
+     }
+ 
+     let clearButton = this.makeXULNode("toolbarbutton");
+-    clearButton.setAttribute("label", this.getStr("btnClear"));
++    clearButton.setAttribute("label", l10n.getStr("btnClear"));
+     clearButton.classList.add("webconsole-clear-console-button");
+     clearButton.addEventListener("command", HUD_clearButton_onCommand, false);
+ 
+     aToolbar.appendChild(clearButton);
+   },
+ 
+   /**
+    * Destroy the property inspector message node. This performs the necessary
+@@ -4166,28 +2382,16 @@ HeadsUpDisplay.prototype = {
        let positionPref = Services.prefs.getCharPref("devtools.webconsole.position");
        this.positionConsole(positionPref);
      }
@@ -4304,7 +5013,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Destroy the HUD object. Call this method to avoid memory leaks when the Web
-@@ -4207,59 +3102,72 @@ HeadsUpDisplay.prototype = {
+@@ -4207,59 +2411,72 @@ HeadsUpDisplay.prototype = {
      this.positionMenuitems.below.removeEventListener("command",
        this._positionConsoleBelow, false);
      this.positionMenuitems.window.removeEventListener("command",
@@ -4401,7 +5110,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * @param ignored This parameter is currently ignored, and will be removed
   * See bug 594304
   * @param aDocument The document, the factory is to generate nodes from
-@@ -4281,991 +3189,537 @@ function NodeFactory(aFactoryType, ignor
+@@ -4281,991 +2498,537 @@ function NodeFactory(aFactoryType, ignor
      }
    }
    else {
@@ -5296,8 +6005,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    if (aEvalString !== null) {
 +    if (aOptions.updateButtonCallback) {
        buttons.push({
-         label: HUDService.getStr("update.button"),
-         accesskey: HUDService.getStr("update.accesskey"),
+-        label: HUDService.getStr("update.button"),
+-        accesskey: HUDService.getStr("update.accesskey"),
 -        oncommand: function () {
 -          try {
 -            var result = self.evalInSandbox(aEvalString);
@@ -5313,6 +6022,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -            self.console.error(ex);
 -          }
 -        }
++        label: l10n.getStr("update.button"),
++        accesskey: l10n.getStr("update.accesskey"),
 +        oncommand: aOptions.updateButtonCallback,
        });
      }
@@ -5331,8 +6042,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    panel.sizeTo(350, 450);
 +    let parent = this.document.getElementById("mainPopupSet");
 +    let title = aOptions.title ?
-+        HUDService.getFormatStr("jsPropertyInspectTitle", [aOptions.title]) :
-+        HUDService.getStr("jsPropertyTitle");
++        l10n.getFormatStr("jsPropertyInspectTitle", [aOptions.title]) :
++        l10n.getStr("jsPropertyTitle");
 +
 +    let propPanel = new PropertyPanel(parent, title, aOptions.data, buttons);
 +
@@ -5559,7 +6270,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      let status = "[" + response.httpVersion + " " + response.status + " " +
 +                   response.statusText;
 +      if (aMessage.stage == "TRANSACTION_CLOSE") {
-+        status += " " + HUDService.getFormatStr("NetworkPanel.durationMS",
++        status += " " + l10n.getFormatStr("NetworkPanel.durationMS",
 +                                                [entry.time]);
        }
 -    }, false);
@@ -5780,11 +6491,17 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @returns void
     */
    resizeInput: function JST_resizeInput()
-@@ -5398,16 +3852,20 @@ JSTerm.prototype = {
+@@ -5393,21 +3156,25 @@ JSTerm.prototype = {
+       case Ci.nsIDOMKeyEvent.DOM_VK_TAB:
+         // Generate a completion and accept the first proposed value.
+         if (this.complete(this.COMPLETE_HINT_ONLY) &&
+             this.lastCompletion &&
+             this.acceptProposedCompletion()) {
            aEvent.preventDefault();
          }
          else {
-           this.updateCompleteNode(HUDService.getStr("Autocomplete.blank"));
+-          this.updateCompleteNode(HUDService.getStr("Autocomplete.blank"));
++          this.updateCompleteNode(l10n.getStr("Autocomplete.blank"));
            aEvent.preventDefault();
          }
          break;
@@ -5801,7 +6518,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Go up/down the history stack of input values.
     *
-@@ -5500,27 +3958,27 @@ JSTerm.prototype = {
+@@ -5500,27 +3267,27 @@ JSTerm.prototype = {
        return false;
      }
  
@@ -5831,7 +6548,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *          cursor position to the end of the completed text.
     *          If there is only one possible completion, then this completion
     *          value is used and the cursor is put at the end of the completion.
-@@ -5532,99 +3990,139 @@ JSTerm.prototype = {
+@@ -5532,99 +3299,139 @@ JSTerm.prototype = {
     *          last time this function was called, then the same completion is
     *          used again. If there is only one possible completion, then
     *          the inputNode.value is set to this value and the selection is set
@@ -6007,7 +6724,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Accept the proposed input completion.
-@@ -5633,17 +4131,17 @@ JSTerm.prototype = {
+@@ -5633,17 +3440,17 @@ JSTerm.prototype = {
     *         True if there was a selected completion item and the input value
     *         was updated, false otherwise.
     */
@@ -6026,7 +6743,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      this.clearCompletion();
  
-@@ -5663,110 +4161,38 @@ JSTerm.prototype = {
+@@ -5663,110 +3470,38 @@ JSTerm.prototype = {
      this.completeNode.value = prefix + aSuffix;
    },
  
@@ -6152,7 +6869,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  { }
  
  FirefoxApplicationHooks.prototype = {
-@@ -5924,18 +4350,20 @@ ConsoleUtils = {
+@@ -5822,17 +3557,17 @@ ConsoleUtils = {
+    * @returns string The timestamp formatted for display.
+    */
+   timestampString: function ConsoleUtils_timestampString(ms)
+   {
+     var d = new Date(ms ? ms : null);
+     let hours = d.getHours(), minutes = d.getMinutes();
+     let seconds = d.getSeconds(), milliseconds = d.getMilliseconds();
+     let parameters = [ hours, minutes, seconds, milliseconds ];
+-    return HUDService.getFormatStr("timestampFormat", parameters);
++    return l10n.getFormatStr("timestampFormat", parameters);
+   },
+ 
+   /**
+    * Scrolls a node so that it's visible in its containing XUL "scrollbox"
+    * element.
+    *
+    * @param nsIDOMNode aNode
+    *        The node to make visible.
+@@ -5924,18 +3659,20 @@ ConsoleUtils = {
      // Store the body text, since it is needed later for the property tree
      // case.
      let body = aBody;
@@ -6175,7 +6911,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        aBody = aDocument.createTextNode(aBody);
      }
  
-@@ -5998,17 +4426,24 @@ ConsoleUtils = {
+@@ -5998,17 +3735,24 @@ ConsoleUtils = {
  
        tree.appendChild(aDocument.createElement("treechildren"));
  
@@ -6201,7 +6937,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      node.appendChild(repeatContainer);
      if (locationNode) {
        node.appendChild(locationNode);
-@@ -6073,17 +4508,17 @@ ConsoleUtils = {
+@@ -6073,17 +3817,17 @@ ConsoleUtils = {
     */
    createLocationNode:
    function ConsoleUtils_createLocationNode(aDocument, aSourceURL,
@@ -6220,7 +6956,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      // Style appropriately.
      locationNode.setAttribute("crop", "center");
      locationNode.setAttribute("title", aSourceURL);
-@@ -6293,64 +4728,33 @@ ConsoleUtils = {
+@@ -6293,64 +4037,33 @@ ConsoleUtils = {
    {
      let lastNodeHeight = aOutputNode.lastChild ?
                           aOutputNode.lastChild.clientHeight : 0;
@@ -6289,7 +7025,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
          HUDService.animate(hudId, ANIMATE_OUT, function() {
            // If the user closes the console while the console is animating away,
-@@ -6362,16 +4766,17 @@ HeadsUpDisplayUICommands = {
+@@ -6362,16 +4075,17 @@ HeadsUpDisplayUICommands = {
            }
          });
        }
@@ -6307,7 +7043,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *         The hudId or null if the active chrome window has no open Web
     *         Console.
     */
-@@ -6510,50 +4915,16 @@ function ConsoleEntry(aConfig, id)
+@@ -6510,50 +4224,16 @@ function ConsoleEntry(aConfig, id)
  
  ConsoleEntry.prototype = {
  
@@ -6358,7 +7094,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * A controller (an instance of nsIController) that makes editing actions
   * behave appropriately in the context of the Web Console.
   */
-@@ -6634,136 +5005,16 @@ CommandController.prototype = {
+@@ -6634,136 +4314,16 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
@@ -6495,7 +7231,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * Get the app's name so we can properly dispatch app-specific
   * methods per API call
   * @returns Gecko application name
-@@ -6782,23 +5033,29 @@ function appName()
+@@ -6782,23 +4342,29 @@ function appName()
    let name = APP_ID_TABLE[APP_ID];
  
    if (name){
@@ -6527,7 +7263,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  /**
   * Some commands need customization - this is how we get at them.
-@@ -6820,22 +5077,24 @@ let commandExports = undefined;
+@@ -6820,22 +4386,24 @@ let commandExports = undefined;
   * @param object aConsole
   *        Console object to use within the GcliTerm.
   * @param nsIDOMElement aHintNode
@@ -6553,7 +7289,20 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    this.hide = this.hide.bind(this);
  
    // Allow GCLI:Inputter to decide how and when to open a scratchpad window
-@@ -6856,17 +5115,17 @@ function GcliTerm(aContentWindow, aHudId
+@@ -6844,29 +4412,29 @@ function GcliTerm(aContentWindow, aHudId
+       return aEvent.shiftKey &&
+           aEvent.keyCode === Ci.nsIDOMKeyEvent.DOM_VK_RETURN;
+     },
+     activate: function Scratchpad_activate(aValue) {
+       aValue = aValue.replace(/^\s*{\s*/, '');
+       ScratchpadManager.openScratchpad({ text: aValue });
+       return true;
+     },
+-    linkText: stringBundle.GetStringFromName('scratchpad.linkText')
++    linkText: l10n.getStr('scratchpad.linkText')
+   };
+ 
+   this.opts = {
      environment: {
        hudId: this.hudId,
        chromeDocument: this.document,
@@ -6572,7 +7321,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      hintElement: this.hintNode,
      consoleWrap: aConsoleWrap,
      scratchpad: scratchpad,
-@@ -6922,44 +5181,37 @@ GcliTerm.prototype = {
+@@ -6922,44 +4490,37 @@ GcliTerm.prototype = {
      delete this.opts.contentDocument;
      delete this.opts.jsEnvironment;
      delete this.opts.gcliTerm;
@@ -6621,7 +7370,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    createUI: function Gcli_createUI()
    {
-@@ -6988,72 +5240,30 @@ GcliTerm.prototype = {
+@@ -6988,72 +4549,30 @@ GcliTerm.prototype = {
    onCommandOutput: function Gcli_onCommandOutput(aEvent)
    {
      // When we can update the history of the console, then we should stop
@@ -6701,7 +7450,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        '<richlistitem xmlns="' + XUL_NS + '" _clipboardText="${clipboardText}"' +
        '    _timestamp="${timestamp}" _id="${id}" class="hud-msg-node">' +
        '  <label class="webconsole-timestamp" _value="${timestampString}"/>' +
-@@ -7080,96 +5290,84 @@ GcliTerm.prototype = {
+@@ -7080,96 +4599,84 @@ GcliTerm.prototype = {
      ConsoleUtils.outputMessageNode(element, this.hudId);
    },
  
@@ -6950,6 +7699,742 @@ diff --git a/browser/devtools/webconsole/NetworkHelper.jsm b/browser/devtools/we
    /**
     * Gets the nsIDOMWindow that is associated with aRequest.
     *
+diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/webconsole/NetworkPanel.jsm
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/NetworkPanel.jsm
+@@ -0,0 +1,731 @@
++/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* ***** BEGIN LICENSE BLOCK *****
++ * Version: MPL 1.1/GPL 2.0/LGPL 2.1
++ *
++ * The contents of this file are subject to the Mozilla Public License Version
++ * 1.1 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * http://www.mozilla.org/MPL/
++ *
++ * Software distributed under the License is distributed on an "AS IS" basis,
++ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
++ * for the specific language governing rights and limitations under the
++ * License.
++ *
++ * The Original Code is the Web Console network panel.
++ *
++ * The Initial Developer of the Original Code is
++ * The Mozilla Foundation
++ * Portions created by the Initial Developer are Copyright (C) 2011
++ * the Initial Developer. All Rights Reserved.
++ *
++ * Contributor(s):
++ *   David Dahl <ddahl@mozilla.com> (original author)
++ *   Rob Campbell <rcampbell@mozilla.com>
++ *   Johnathan Nightingale <jnightingale@mozilla.com>
++ *   Patrick Walton <pcwalton@mozilla.com>
++ *   Julian Viereck <jviereck@mozilla.com>
++ *   Mihai Șucan <mihai.sucan@gmail.com>
++ *   Michael Ratcliffe <mratcliffe@mozilla.com>
++ *   Joe Walker <jwalker@mozilla.com>
++ *   Sonny Piers <sonny.piers@gmail.com>
++ *
++ * Alternatively, the contents of this file may be used under the terms of
++ * either the GNU General Public License Version 2 or later (the "GPL"), or
++ * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
++ * in which case the provisions of the GPL or the LGPL are applicable instead
++ * of those above. If you wish to allow use of your version of this file only
++ * under the terms of either the GPL or the LGPL, and not to allow others to
++ * use your version of this file under the terms of the MPL, indicate your
++ * decision by deleting the provisions above and replace them with the notice
++ * and other provisions required by the GPL or the LGPL. If you do not delete
++ * the provisions above, a recipient may use your version of this file under
++ * the terms of any one of the MPL, the GPL or the LGPL.
++ *
++ * ***** END LICENSE BLOCK ***** */
++
++let Cc = Components.classes;
++let Ci = Components.interfaces;
++let Cu = Components.utils;
++
++Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++
++XPCOMUtils.defineLazyServiceGetter(this, "mimeService",
++                                   "@mozilla.org/mime;1",
++                                   "nsIMIMEService");
++
++XPCOMUtils.defineLazyGetter(this, "NetworkHelper", function () {
++  let obj = {};
++  Cu.import("resource:///modules/NetworkHelper.jsm", obj);
++  return obj.NetworkHelper;
++});
++
++XPCOMUtils.defineLazyGetter(this, "NetUtil", function () {
++  var obj = {};
++  Cu.import("resource://gre/modules/NetUtil.jsm", obj);
++  return obj.NetUtil;
++});
++
++XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function () {
++  let obj = {};
++  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
++  return obj.WebConsoleUtils;
++});
++
++XPCOMUtils.defineLazyGetter(this, "l10n", function () {
++  return WebConsoleUtils.l10n;
++});
++
++var EXPORTED_SYMBOLS = ["NetworkPanel"];
++
++/**
++ * Creates a new NetworkPanel.
++ *
++ * @param nsIDOMNode aParent
++ *        Parent node to append the created panel to.
++ * @param object aHttpActivity
++ *        HttpActivity to display in the panel.
++ */
++function NetworkPanel(aParent, aHttpActivity)
++{
++  let doc = aParent.ownerDocument;
++  this.httpActivity = aHttpActivity;
++
++  // Create the underlaying panel
++  this.panel = createElement(doc, "panel", {
++    label: l10n.getStr("NetworkPanel.label"),
++    titlebar: "normal",
++    noautofocus: "true",
++    noautohide: "true",
++    close: "true"
++  });
++
++  // Create the iframe that displays the NetworkPanel XHTML.
++  this.iframe = createAndAppendElement(this.panel, "iframe", {
++    src: "chrome://browser/content/NetworkPanel.xhtml",
++    type: "content",
++    flex: "1"
++  });
++
++  let self = this;
++
++  // Destroy the panel when it's closed.
++  this.panel.addEventListener("popuphidden", function onPopupHide() {
++    self.panel.removeEventListener("popuphidden", onPopupHide, false);
++    self.panel.parentNode.removeChild(self.panel);
++    self.panel = null;
++    self.iframe = null;
++    self.document = null;
++    self.httpActivity = null;
++
++    if (self.linkNode) {
++      self.linkNode._panelOpen = false;
++      self.linkNode = null;
++    }
++  }, false);
++
++  // Set the document object and update the content once the panel is loaded.
++  this.panel.addEventListener("load", function onLoad() {
++    self.panel.removeEventListener("load", onLoad, true);
++    self.document = self.iframe.contentWindow.document;
++    self.update();
++  }, true);
++
++  // Create the footer.
++  let footer = createElement(doc, "hbox", { align: "end" });
++  createAndAppendElement(footer, "spacer", { flex: 1 });
++
++  createAndAppendElement(footer, "resizer", { dir: "bottomend" });
++  this.panel.appendChild(footer);
++
++  aParent.appendChild(this.panel);
++}
++
++NetworkPanel.prototype =
++{
++  /**
++   * Callback is called once the NetworkPanel is processed completly. Used by
++   * unit tests.
++   */
++  isDoneCallback: null,
++
++  /**
++   * The current state of the output.
++   */
++  _state: 0,
++
++  /**
++   * State variables.
++   */
++  _INIT: 0,
++  _DISPLAYED_REQUEST_HEADER: 1,
++  _DISPLAYED_REQUEST_BODY: 2,
++  _DISPLAYED_RESPONSE_HEADER: 3,
++  _TRANSITION_CLOSED: 4,
++
++  _fromDataRegExp: /Content-Type\:\s*application\/x-www-form-urlencoded/,
++
++  /**
++   * Small helper function that is nearly equal to l10n.getFormatStr
++   * except that it prefixes aName with "NetworkPanel.".
++   *
++   * @param string aName
++   *        The name of an i10n string to format. This string is prefixed with
++   *        "NetworkPanel." before calling the HUDService.getFormatStr function.
++   * @param array aArray
++   *        Values used as placeholder for the i10n string.
++   * @returns string
++   *          The i10n formated string.
++   */
++  _format: function NP_format(aName, aArray)
++  {
++    return l10n.getFormatStr("NetworkPanel." + aName, aArray);
++  },
++
++  /**
++   * Returns the content type of the response body. This is based on the
++   * response.header["Content-Type"] info. If this value is not available, then
++   * the content type is tried to be estimated by the url file ending.
++   *
++   * @returns string or null
++   *          Content type or null if no content type could be figured out.
++   */
++  get _contentType()
++  {
++    let response = this.httpActivity.response;
++    let contentTypeValue = null;
++
++    if (response.header && response.header["Content-Type"]) {
++      let types = response.header["Content-Type"].split(/,|;/);
++      for (let i = 0; i < types.length; i++) {
++        let type = NetworkHelper.mimeCategoryMap[types[i]];
++        if (type) {
++          return types[i];
++        }
++      }
++    }
++
++    // Try to get the content type from the request file extension.
++    let uri = NetUtil.newURI(this.httpActivity.url);
++    let mimeType = null;
++    if ((uri instanceof Ci.nsIURL) && uri.fileExtension) {
++      try {
++        mimeType = mimeService.getTypeFromExtension(uri.fileExtension);
++      } catch(e) {
++        // Added to prevent failures on OS X 64. No Flash?
++        Cu.reportError(e);
++        // Return empty string to pass unittests.
++        return "";
++      }
++    }
++    return mimeType;
++  },
++
++  /**
++   *
++   * @returns boolean
++   *          True if the response is an image, false otherwise.
++   */
++  get _responseIsImage()
++  {
++    return NetworkHelper.mimeCategoryMap[this._contentType] == "image";
++  },
++
++  /**
++   *
++   * @returns boolean
++   *          True if the response body contains text, false otherwise.
++   */
++  get _isResponseBodyTextData()
++  {
++    let contentType = this._contentType;
++
++    if (!contentType)
++      return false;
++
++    if (contentType.indexOf("text/") == 0) {
++      return true;
++    }
++
++    switch (NetworkHelper.mimeCategoryMap[contentType]) {
++      case "txt":
++      case "js":
++      case "json":
++      case "css":
++      case "html":
++      case "svg":
++      case "xml":
++        return true;
++
++      default:
++        return false;
++    }
++  },
++
++  /**
++   *
++   * @returns boolean
++   *          Returns true if the server responded that the request is already
++   *          in the browser's cache, false otherwise.
++   */
++  get _isResponseCached()
++  {
++    return this.httpActivity.response.status.indexOf("304") != -1;
++  },
++
++  /**
++   *
++   * @returns boolean
++   *          Returns true if the posted body contains form data.
++   */
++  get _isRequestBodyFormData()
++  {
++    let requestBody = this.httpActivity.request.body;
++    return this._fromDataRegExp.test(requestBody);
++  },
++
++  /**
++   * Appends the node with id=aId by the text aValue.
++   *
++   * @param string aId
++   * @param string aValue
++   * @returns void
++   */
++  _appendTextNode: function NP_appendTextNode(aId, aValue)
++  {
++    let textNode = this.document.createTextNode(aValue);
++    this.document.getElementById(aId).appendChild(textNode);
++  },
++
++  /**
++   * Generates some HTML to display the key-value pair of the aList data. The
++   * generated HTML is added to node with id=aParentId.
++   *
++   * @param string aParentId
++   *        Id of the parent node to append the list to.
++   * @oaram object aList
++   *        Object that holds the key-value information to display in aParentId.
++   * @param boolean aIgnoreCookie
++   *        If true, the key-value named "Cookie" is not added to the list.
++   * @returns void
++   */
++  _appendList: function NP_appendList(aParentId, aList, aIgnoreCookie)
++  {
++    let parent = this.document.getElementById(aParentId);
++    let doc = this.document;
++
++    aList.sort(function(a, b) {
++      return a.name.toLowerCase() < b.name.toLowerCase();
++    });
++
++    aList.forEach(function(aItem) {
++      let name = aItem.name;
++      let value = aItem.value;
++      /*if (aIgnoreCookie && name == "Cookie") {
++        return;
++      }*/
++
++      /**
++       * The following code creates the HTML:
++       * <tr>
++       * <th scope="row" class="property-name">${line}:</th>
++       * <td class="property-value">${aList[line]}</td>
++       * </tr>
++       * and adds it to parent.
++       */
++      let row = doc.createElement("tr");
++      let textNode = doc.createTextNode(name + ":");
++      let th = doc.createElement("th");
++      th.setAttribute("scope", "row");
++      th.setAttribute("class", "property-name");
++      th.appendChild(textNode);
++      row.appendChild(th);
++
++      textNode = doc.createTextNode(value);
++      let td = doc.createElement("td");
++      td.setAttribute("class", "property-value");
++      td.appendChild(textNode);
++      row.appendChild(td);
++
++      parent.appendChild(row);
++    });
++  },
++
++  /**
++   * Displays the node with id=aId.
++   *
++   * @param string aId
++   * @returns void
++   */
++  _displayNode: function NP_displayNode(aId)
++  {
++    this.document.getElementById(aId).style.display = "block";
++  },
++
++  /**
++   * Sets the request URL, request method, the timing information when the
++   * request started and the request header content on the NetworkPanel.
++   * If the request header contains cookie data, a list of sent cookies is
++   * generated and a special sent cookie section is displayed + the cookie list
++   * added to it.
++   *
++   * @returns void
++   */
++  _displayRequestHeader: function NP_displayRequestHeader()
++  {
++    let entry = this.httpActivity.log.entries[0];
++    let timing = entry.timings;
++    let request = entry.request;
++    // FIXME
++    let requestTime = WebConsoleUtils.
++                      convertISO8601toMilliseconds(entry.startedDateTime);
++
++    this._appendTextNode("headUrl", request.url);
++    this._appendTextNode("headMethod", request.method);
++    this._appendTextNode("requestHeadersInfo",
++                         ConsoleUtils.timestampString(requestTime));
++
++    this._appendList("requestHeadersContent", request.headers, true);
++
++    if (request.cookies.length > 0) {
++      this._displayNode("requestCookie");
++      this._appendList("requestCookieContent", request.cookies);
++    }
++  },
++
++  /**
++   * Displays the request body section of the NetworkPanel and set the request
++   * body content on the NetworkPanel.
++   *
++   * @returns void
++   */
++  _displayRequestBody: function NP_displayRequestBody() {
++    this._displayNode("requestBody");
++    this._appendTextNode("requestBodyContent", this.httpActivity.request.body);
++  },
++
++  /*
++   * Displays the `sent form data` section. Parses the request header for the
++   * submitted form data displays it inside of the `sent form data` section.
++   *
++   * @returns void
++   */
++  _displayRequestForm: function NP_processRequestForm() {
++    let requestBodyLines = this.httpActivity.request.body.split("\n");
++    let formData = requestBodyLines[requestBodyLines.length - 1].
++                      replace(/\+/g, " ").split("&");
++
++    function unescapeText(aText)
++    {
++      try {
++        return decodeURIComponent(aText);
++      }
++      catch (ex) {
++        return decodeURIComponent(unescape(aText));
++      }
++    }
++
++    let formDataObj = {};
++    for (let i = 0; i < formData.length; i++) {
++      let data = formData[i];
++      let idx = data.indexOf("=");
++      let key = data.substring(0, idx);
++      let value = data.substring(idx + 1);
++      formDataObj[unescapeText(key)] = unescapeText(value);
++    }
++
++    this._appendList("requestFormDataContent", formDataObj);
++    this._displayNode("requestFormData");
++  },
++
++  /**
++   * Displays the response section of the NetworkPanel, sets the response status,
++   * the duration between the start of the request and the receiving of the
++   * response header as well as the response header content on the the NetworkPanel.
++   *
++   * @returns void
++   */
++  _displayResponseHeader: function NP_displayResponseHeader()
++  {
++    let entry = this.httpActivity.log.entries[0];
++    let timing = entry.timings;
++    let response = entry.response;
++
++    this._appendTextNode("headStatus", response.httpVersion + " " +
++                                       response.status + " " +
++                                       response.statusText);
++
++    let deltaDuration = timing.sent + timing.wait;
++    this._appendTextNode("responseHeadersInfo",
++      this._format("durationMS", [deltaDuration]));
++
++    this._displayNode("responseContainer");
++    this._appendList("responseHeadersContent", response.headers);
++  },
++
++  /**
++   * Displays the respones image section, sets the source of the image displayed
++   * in the image response section to the request URL and the duration between
++   * the receiving of the response header and the end of the request. Once the
++   * image is loaded, the size of the requested image is set.
++   *
++   * @returns void
++   */
++  _displayResponseImage: function NP_displayResponseImage()
++  {
++    let self = this;
++    let timing = this.httpActivity.timing;
++    let response = this.httpActivity.response;
++    let cached = "";
++
++    if (this._isResponseCached) {
++      cached = "Cached";
++    }
++
++    let imageNode = this.document.getElementById("responseImage" + cached +"Node");
++    imageNode.setAttribute("src", this.httpActivity.url);
++
++    // This function is called to set the imageInfo.
++    function setImageInfo() {
++      let deltaDuration =
++        Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
++      self._appendTextNode("responseImage" + cached + "Info",
++        self._format("imageSizeDeltaDurationMS", [
++          imageNode.width, imageNode.height, deltaDuration
++        ]
++      ));
++    }
++
++    // Check if the image is already loaded.
++    if (imageNode.width != 0) {
++      setImageInfo();
++    }
++    else {
++      // Image is not loaded yet therefore add a load event.
++      imageNode.addEventListener("load", function imageNodeLoad() {
++        imageNode.removeEventListener("load", imageNodeLoad, false);
++        setImageInfo();
++      }, false);
++    }
++
++    this._displayNode("responseImage" + cached);
++  },
++
++  /**
++   * Displays the response body section, sets the the duration between
++   * the receiving of the response header and the end of the request as well as
++   * the content of the response body on the NetworkPanel.
++   *
++   * @param [optional] string aCachedContent
++   *        Cached content for this request. If this argument is set, the
++   *        responseBodyCached section is displayed.
++   * @returns void
++   */
++  _displayResponseBody: function NP_displayResponseBody(aCachedContent)
++  {
++    let timing = this.httpActivity.timing;
++    let response = this.httpActivity.response;
++    let cached =  "";
++    if (aCachedContent) {
++      cached = "Cached";
++    }
++
++    let deltaDuration =
++      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
++    this._appendTextNode("responseBody" + cached + "Info",
++      this._format("durationMS", [deltaDuration]));
++
++    this._displayNode("responseBody" + cached);
++    this._appendTextNode("responseBody" + cached + "Content",
++                            aCachedContent || response.body);
++  },
++
++  /**
++   * Displays the `Unknown Content-Type hint` and sets the duration between the
++   * receiving of the response header on the NetworkPanel.
++   *
++   * @returns void
++   */
++  _displayResponseBodyUnknownType: function NP_displayResponseBodyUnknownType()
++  {
++    let timing = this.httpActivity.timing;
++
++    this._displayNode("responseBodyUnknownType");
++    let deltaDuration =
++      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
++    this._appendTextNode("responseBodyUnknownTypeInfo",
++      this._format("durationMS", [deltaDuration]));
++
++    this._appendTextNode("responseBodyUnknownTypeContent",
++      this._format("responseBodyUnableToDisplay.content", [this._contentType]));
++  },
++
++  /**
++   * Displays the `no response body` section and sets the the duration between
++   * the receiving of the response header and the end of the request.
++   *
++   * @returns void
++   */
++  _displayNoResponseBody: function NP_displayNoResponseBody()
++  {
++    let timing = this.httpActivity.timing;
++
++    this._displayNode("responseNoBody");
++    let deltaDuration =
++      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
++    this._appendTextNode("responseNoBodyInfo",
++      this._format("durationMS", [deltaDuration]));
++  },
++
++  /*
++   * Calls the isDoneCallback function if one is specified.
++   */
++  _callIsDone: function() {
++    if (this.isDoneCallback) {
++      this.isDoneCallback();
++    }
++  },
++
++  /**
++   * Updates the content of the NetworkPanel's iframe.
++   *
++   * @returns void
++   */
++  update: function NP_update()
++  {
++    /**
++     * After the iframe's contentWindow is ready, the document object is set.
++     * If the document object isn't set yet, then the page is loaded and nothing
++     * can be updated.
++     */
++    if (!this.document) {
++      return;
++    }
++
++    let entry = this.httpActivity.log.entries[0];
++    let timing = entry.timings;
++    let request = entry.request;
++    let response = entry.response;
++
++    switch (this._state) {
++      case this._INIT:
++        this._displayRequestHeader();
++        this._state = this._DISPLAYED_REQUEST_HEADER;
++        // FALL THROUGH
++
++      case this._DISPLAYED_REQUEST_HEADER:
++        // Process the request body if there is one.
++        // FIXME
++        if (!request.bodyDiscarded && request.body) {
++          // Check if we send some form data. If so, display the form data special.
++          if (this._isRequestBodyFormData) {
++            this._displayRequestForm();
++          }
++          else {
++            this._displayRequestBody();
++          }
++          this._state = this._DISPLAYED_REQUEST_BODY;
++        }
++        // FALL THROUGH
++
++      case this._DISPLAYED_REQUEST_BODY:
++        // There is always a response header. Therefore we can skip here if
++        // we don't have a response header yet and don't have to try updating
++        // anything else in the NetworkPanel.
++        if (!response.headers) {
++          break
++        }
++        this._displayResponseHeader();
++        this._state = this._DISPLAYED_RESPONSE_HEADER;
++        // FALL THROUGH
++
++      case this._DISPLAYED_RESPONSE_HEADER:
++        // Check if the transition is done.
++        if (timing.TRANSACTION_CLOSE && response.isDone) {
++          if (response.bodyDiscarded) {
++            this._callIsDone();
++          }
++          else if (this._responseIsImage) {
++            this._displayResponseImage();
++            this._callIsDone();
++          }
++          else if (!this._isResponseBodyTextData) {
++            this._displayResponseBodyUnknownType();
++            this._callIsDone();
++          }
++          else if (response.body) {
++            this._displayResponseBody();
++            this._callIsDone();
++          }
++          else if (this._isResponseCached) {
++            let self = this;
++            NetworkHelper.loadFromCache(this.httpActivity.url,
++                                        this.httpActivity.charset,
++                                        function(aContent) {
++              // If some content could be loaded from the cache, then display
++              // the body.
++              if (aContent) {
++                self._displayResponseBody(aContent);
++                self._callIsDone();
++              }
++              // Otherwise, show the "There is no response body" hint.
++              else {
++                self._displayNoResponseBody();
++                self._callIsDone();
++              }
++            });
++          }
++          else {
++            this._displayNoResponseBody();
++            this._callIsDone();
++          }
++          this._state = this._TRANSITION_CLOSED;
++        }
++        break;
++    }
++  }
++}
++
++/**
++ * Creates a DOMNode and sets all the attributes of aAttributes on the created
++ * element.
++ *
++ * @param nsIDOMDocument aDocument
++ *        Document to create the new DOMNode.
++ * @param string aTag
++ *        Name of the tag for the DOMNode.
++ * @param object aAttributes
++ *        Attributes set on the created DOMNode.
++ *
++ * @returns nsIDOMNode
++ */
++function createElement(aDocument, aTag, aAttributes)
++{
++  let node = aDocument.createElement(aTag);
++  if (aAttributes) {
++    for (let attr in aAttributes) {
++      node.setAttribute(attr, aAttributes[attr]);
++    }
++  }
++  return node;
++}
++
++/**
++ * Creates a new DOMNode and appends it to aParent.
++ *
++ * @param nsIDOMNode aParent
++ *        A parent node to append the created element.
++ * @param string aTag
++ *        Name of the tag for the DOMNode.
++ * @param object aAttributes
++ *        Attributes set on the created DOMNode.
++ *
++ * @returns nsIDOMNode
++ */
++function createAndAppendElement(aParent, aTag, aAttributes)
++{
++  let node = createElement(aParent.ownerDocument, aTag, aAttributes);
++  aParent.appendChild(node);
++  return node;
++}
 diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/webconsole/PropertyPanel.jsm
 --- a/browser/devtools/webconsole/PropertyPanel.jsm
 +++ b/browser/devtools/webconsole/PropertyPanel.jsm
@@ -7640,7 +9125,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -0,0 +1,904 @@
+@@ -0,0 +1,927 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -7693,6 +9178,8 @@ new file mode 100644
 +Cu.import("resource://gre/modules/Services.jsm");
 +
 +var EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider"];
++
++const HUD_STRINGS_URI = "chrome://global/locale/headsUpDisplay.properties";
 +
 +const TYPES = { OBJECT: 0,
 +                FUNCTION: 1,
@@ -8320,6 +9807,27 @@ new file mode 100644
 +    return new Date(aTime).getTime();
 +  },
 +};
++
++//////////////////////////////////////////////////////////////////////////
++// Localization
++//////////////////////////////////////////////////////////////////////////
++
++WebConsoleUtils.l10n = {
++  getStr: function l10n_getStr(aName)
++  {
++    return this.stringBundle.GetStringFromName(aName);
++  },
++
++  getFormatStr: function l10n_getFormatStr(aName, aArray)
++  {
++    return this.stringBundle.formatStringFromName(aName, aArray, aArray.length);
++  },
++};
++
++XPCOMUtils.defineLazyGetter(WebConsoleUtils.l10n, "stringBundle", function() {
++  return Services.strings.createBundle(HUD_STRINGS_URI);
++});
++
 +
 +//////////////////////////////////////////////////////////////////////////
 +// JS Completer
