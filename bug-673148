@@ -1,8 +1,8 @@
 # HG changeset patch
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1331761582 -7200
+# Date 1331837970 -7200
 # Node ID f156adf53752257b14ec7db012733a74c3d4fd55
-# Parent ee4e0c98cb02323c040f439eea81a98b217d3003
+# Parent 0bcbe43a02459819a7976966db253ef7cd7fffbd
 Bug 673148 - (async-webconsole) Make the Web Console async
 
 diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
@@ -23,7 +23,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -0,0 +1,1699 @@
+@@ -0,0 +1,1706 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -869,7 +869,7 @@ new file mode 100644
 +   */
 +  setAsyncListener: function NRL_setAsyncListener(aStream, aListener)
 +  {
-+    dump("NRL_setAsyncListener\n");
++    //dump("NRL_setAsyncListener\n");
 +    // Asynchronously wait for the stream to be readable or closed.
 +    aStream.asyncWait(aListener, 0, 0, Services.tm.mainThread);
 +  },
@@ -955,7 +955,7 @@ new file mode 100644
 +  _findOpenResponse: function NRL__findOpenResponse()
 +  {
 +    if (this._foundOpenResponse) {
-+      dump("NRL__findOpenResponse already did\n");
++      //dump("NRL__findOpenResponse already did\n");
 +      return;
 +    }
 +
@@ -1212,7 +1212,7 @@ new file mode 100644
 +      return;
 +    }
 +
-+    dump("observeActivity ACTIVITY_TYPE_HTTP_TRANSACTION || ACTIVITY_TYPE_SOCKET_TRANSPORT\n");
++    //dump("observeActivity ACTIVITY_TYPE_HTTP_TRANSACTION || ACTIVITY_TYPE_SOCKET_TRANSPORT\n");
 +
 +    if (!(aChannel instanceof Ci.nsIHttpChannel)) {
 +      dump("observeActivity aChannel not instanceof nsIHttpChannel\n");
@@ -1247,6 +1247,7 @@ new file mode 100644
 +    // Store the time information for this activity subtype.
 +    if (aActivitySubtype in transCodes) {
 +      httpActivity.stage = transCodes[aActivitySubtype];
++      dump("timings " + httpActivity.stage + " " + aTimestamp + "\n");
 +      if (httpActivity.stage in httpActivity.timings) {
 +        httpActivity.timings[httpActivity.stage].last = aTimestamp;
 +      }
@@ -1269,7 +1270,7 @@ new file mode 100644
 +        this._onTransactionClose(httpActivity);
 +        break;
 +      default:
-+        dump("aActivitySubtype " + transCodes[aActivitySubtype] + " " + aActivitySubtype + "\n");
++        //dump("aActivitySubtype " + transCodes[aActivitySubtype] + " " + aActivitySubtype + "\n");
 +        break;
 +    }
 +  },
@@ -1596,25 +1597,31 @@ new file mode 100644
 +    // TODO: compare this logic to Firebug
 +    let harTimings = entry.timings;
 +    harTimings.blocked = -1;
-+    harTimings.dns = timings.STATUS_RESOLVED.last -
-+                     timings.STATUS_RESOLVING.first;
++    harTimings.dns = timings.STATUS_RESOLVING ?
++                     timings.STATUS_RESOLVED.last -
++                     timings.STATUS_RESOLVING.first : -1;
 +    harTimings.connect = timings.STATUS_CONNECTED_TO.last -
 +                         timings.STATUS_CONNECTING_TO.first;
-+    harTimings.send = timings.STATUS_WAITING_FOR.first -
-+                      timings.STATUS_SENDING_TO.first;
-+    harTimings.wait = timings.STATUS_RECEIVING_FROM.first -
-+                      timings.STATUS_WAITING_FOR.first;
++    harTimings.send = (timings.STATUS_WAITING_FOR || timings.STATUS_RECEIVING_FROM).first -
++                      timings.STATUS_CONNECTED_TO.last;
++    harTimings.wait = timings.RESPONSE_START.first -
++                      (timings.REQUEST_BODY_SENT || timings.STATUS_SENDING_TO).last;
 +    harTimings.receive = timings.RESPONSE_COMPLETE.last -
-+                         timings.STATUS_RECEIVING_FROM.first;
++                         timings.RESPONSE_START.first;
++
++    //dump("harTimings1 dns " + harTimings.dns + " connect " + harTimings.connect + " send " + harTimings.send + " wait " + harTimings.wait + " receive " + harTimings.receive + "\n");
 +
 +    entry.time = 0;
 +    for (let timing in harTimings) {
-+      let time = Math.round(harTimings[timing] / 1000) || -1;
++      let time = Math.max(Math.round(harTimings[timing] / 1000), -1);
 +      harTimings[timing] = time;
 +      if (time > -1) {
 +        entry.time += time;
 +      }
 +    }
++
++    dump("harTimings2 dns " + harTimings.dns + " connect " + harTimings.connect + " send " + harTimings.send + " wait " + harTimings.wait + " receive " + harTimings.receive + "\n");
++    dump("expected total " + Math.round((timings.TRANSACTION_CLOSE.last - timings.REQUEST_HEADER.first)/1000) + " ms\n");
 +  },
 +
 +  /**
@@ -7831,7 +7838,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/NetworkPanel.jsm
-@@ -0,0 +1,727 @@
+@@ -0,0 +1,736 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -8289,7 +8296,16 @@ new file mode 100644
 +                         [response.httpVersion, response.status,
 +                          response.statusText].join(" "));
 +
-+    let deltaDuration = timing.send + timing.wait;
++    // Calculate how much time it took from the request start, until the
++    // response started to be received.
++    let deltaDuration = 0;
++    ["dns", "connect", "send", "wait"].forEach(function (aValue) {
++      let ms = timing[aValue];
++      if (ms > -1) {
++        deltaDuration += ms;
++      }
++    });
++
 +    this._appendTextNode("responseHeadersInfo",
 +      this._format("durationMS", [deltaDuration]));
 +
