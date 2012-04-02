@@ -1,0 +1,1150 @@
+# HG changeset patch
+# Parent 0e959c772e5fa7d3285d8c9eb1456dee19ce4964
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1333398705 -10800
+
+Bug 673148 - (async-webconsole) Part 1 - Make console API async
+
+diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
+--- a/browser/devtools/jar.mn
++++ b/browser/devtools/jar.mn
+@@ -10,9 +10,9 @@ browser.jar:
+     content/browser/devtools/cssruleview.xul      (styleinspector/cssruleview.xul)
+     content/browser/devtools/styleinspector.css   (styleinspector/styleinspector.css)
+     content/browser/orion.js                      (sourceeditor/orion/orion.js)
+ *   content/browser/source-editor-overlay.xul     (sourceeditor/source-editor-overlay.xul)
+ *   content/browser/debugger.xul                  (debugger/debugger.xul)
+     content/browser/debugger.css                  (debugger/debugger.css)
+     content/browser/debugger.js                   (debugger/debugger.js)
+     content/browser/debugger-view.js              (debugger/debugger-view.js)
+-
++    content/browser/devtools/HUDService-content.js (webconsole/HUDService-content.js)
+diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/HUDService-content.js
+@@ -0,0 +1,338 @@
++/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* ***** BEGIN LICENSE BLOCK *****
++ * Version: MPL 1.1/GPL 2.0/LGPL 2.1
++ *
++ * The contents of this file are subject to the Mozilla Public License Version
++ * 1.1 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * http://www.mozilla.org/MPL/
++ *
++ * Software distributed under the License is distributed on an "AS IS" basis,
++ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
++ * for the specific language governing rights and limitations under the
++ * License.
++ *
++ * The Original Code is Web Console.
++ *
++ * The Initial Developer of the Original Code is
++ * The Mozilla Foundation
++ * Portions created by the Initial Developer are Copyright (C) 2011
++ * the Initial Developer. All Rights Reserved.
++ *
++ * Contributor(s):
++ *   Mihai Sucan <mihai.sucan@gmail.com> (original author)
++ *   David Dahl <ddahl@mozilla.com>
++ *   Rob Campbell <rcampbell@mozilla.com>
++ *   Johnathan Nightingale <jnightingale@mozilla.com>
++ *   Patrick Walton <pcwalton@mozilla.com>
++ *   Julian Viereck <jviereck@mozilla.com>
++ *
++ * Alternatively, the contents of this file may be used under the terms of
++ * either the GNU General Public License Version 2 or later (the "GPL"), or
++ * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
++ * in which case the provisions of the GPL or the LGPL are applicable instead
++ * of those above. If you wish to allow use of your version of this file only
++ * under the terms of either the GPL or the LGPL, and not to allow others to
++ * use your version of this file under the terms of the MPL, indicate your
++ * decision by deleting the provisions above and replace them with the notice
++ * and other provisions required by the GPL or the LGPL. If you do not delete
++ * the provisions above, a recipient may use your version of this file under
++ * the terms of any one of the MPL, the GPL or the LGPL.
++ *
++ * ***** END LICENSE BLOCK ***** */
++
++"use strict";
++
++(function() {
++let Cc = Components.classes;
++let Ci = Components.interfaces;
++let Cu = Components.utils;
++
++Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++Cu.import("resource://gre/modules/Services.jsm");
++
++XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function () {
++  let obj = {};
++  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
++  return obj.WebConsoleUtils;
++});
++
++XPCOMUtils.defineLazyGetter(this, "l10n", function () {
++  return WebConsoleUtils.l10n;
++});
++
++/**
++ * The Web Console client-side instance manager.
++ */
++let Manager = {
++  get "window"() content,
++  get console() this.window.console,
++  sandbox: null,
++  hudId: null,
++  _sequence: 0,
++  _messageListeners: ["WebConsole:Init", "WebConsole:Destroy",
++                      "JSTerm:GetEvalObject", "JSTerm:ClearObjectCache"],
++
++  /**
++   * Getter for a unique ID for the current Web Console client-side instance.
++   */
++  get sequenceId() "HUDContent-" + (++this._sequence),
++
++  /**
++   * Initialize the Web Console manager.
++   */
++  init: function Manager_init()
++  {
++    this._messageListeners.forEach(function(aName) {
++      addMessageListener(aName, this);
++    }, this);
++  },
++
++  /**
++   * The message handler. This method forwards all the messages to the
++   * appropriate code.
++   */
++  receiveMessage: function Manager_receiveMessage(aMessage)
++  {
++    if (!aMessage.json || (aMessage.name != "WebConsole:Init" &&
++                           aMessage.json.hudId != this.hudId)) {
++      Cu.reportError("Web Console content script: received message " +
++                     aMessage.name + " from wrong hudId.");
++      return;
++    }
++
++    switch (aMessage.name) {
++      case "WebConsole:Init":
++        this.onInit(aMessage.json);
++        break;
++      case "WebConsole:EnableFeature":
++        this.enableFeature(aMessage.json.feature, aMessage.json);
++        break;
++      case "WebConsole:DisableFeature":
++        this.disableFeature(aMessage.json.feature);
++        break;
++      case "WebConsole:Destroy":
++        this.destroy();
++        break;
++      case "JSTerm:GetEvalObject":
++        JSTerm.handleGetEvalObject(aMessage.json);
++        break;
++      case "JSTerm:ClearObjectCache":
++        JSTerm.handleClearObjectCache(aMessage.json);
++        break;
++      default:
++        //...
++    }
++  },
++
++  onInit: function Manager_onInit(aMessage)
++  {
++    this.hudId = aMessage.hudId;
++  },
++
++  enableFeature: function Manager_enableFeature(aFeature, aMessage)
++  {
++    if (this._enabledFeatures.indexOf(aFeature) != -1) {
++      Cu.reportError("Web Console content: trying to enable a feature that " +
++                     "is already enabled: " + aFeature + "!");
++      return;
++    }
++
++    switch (aFeature) {
++      case "JSTerm":
++        JSTerm.init(aMessage);
++        break;
++      case "ConsoleAPI":
++        ConsoleAPIObserver.init(aMessage);
++        break;
++      default:
++        Cu.reportError("Web Console content: unknown feature " + aFeature);
++        break;
++    }
++  },
++
++  disableFeature: function Manager_disableFeature(aFeature)
++  {
++    if (this._enabledFeatures.indexOf(aFeature) == -1) {
++      Cu.reportError("Web Console content: trying to disable a feature that " +
++                     "is not enabled: " + aFeature + "!");
++      return;
++    }
++
++    switch (aFeature) {
++      case "JSTerm":
++        JSTerm.destroy();
++        break;
++      case "ConsoleAPI":
++        ConsoleAPIObserver.destroy();
++        break;
++      default:
++        Cu.reportError("Web Console content: unknown feature " + aFeature);
++        break;
++    }
++  },
++
++  destroy: function Manager_destroy()
++  {
++    this._messageListeners.forEach(function(aName) {
++      removeMessageListener(aName, this);
++    }, this);
++
++    this._enabledFeatures.forEach(this.disableFeature, this);
++
++    this.hudId = null;
++
++    Manager = null;
++  },
++};
++
++let JSTerm = {
++  /**
++   * Evaluation result objects are cached in this object. The chrome process can
++   * request any object based on its ID.
++   */
++  _objectCache: null,
++  _messageListeners: ["JSTerm:GetEvalObject", "JSTerm:ClearObjectCache"],
++
++  init: function JST_init()
++  {
++    this._objectCache = {};
++  },
++
++  handleGetEvalObject: function JST_handleGetEvalObject(aRequest)
++  {
++    if (aRequest.cacheId in this._objectCache &&
++        aRequest.objectId in this._objectCache[aRequest.cacheId]) {
++      let object = this._objectCache[aRequest.cacheId][aRequest.objectId];
++      let resultCacheId = aRequest.resultCacheId || aRequest.cacheId;
++      let message = {
++        hudId: Manager.hudId,
++        id: aRequest.id,
++        cacheId: aRequest.cacheId,
++        objectId: aRequest.objectId,
++        object: this.prepareEvalResultObject(resultCacheId, object),
++        childrenCacheId: resultCacheId,
++      };
++      sendAsyncMessage("JSTerm:EvalObject", message);
++    }
++    else {
++      Cu.reportError("JSTerm:GetEvalObject request " + aRequest.id +
++                     ": stale object.");
++    }
++  },
++
++  handleClearObjectCache: function JST_handleClearObjectCache(aRequest)
++  {
++    if (aRequest.cacheId in this._objectCache) {
++      dump("JST_handleClearObjectCache " + aRequest.cacheId + "\n");
++      delete this._objectCache[aRequest.cacheId];
++    }
++    else {
++      dump("JST_handleClearObjectCache " + aRequest.cacheId + " not found\n");
++    }
++  },
++
++  prepareEvalResultObject:
++  function JST_prepareEvalResultObject(aCacheId, aObject)
++  {
++    // Cache the properties that have inspectable values.
++    let propCache = this._objectCache[aCacheId] || {};
++    let result = WebConsoleUtils.namesAndValuesOf(aObject, propCache);
++    if (!(aCacheId in this._objectCache) && Object.keys(propCache).length > 0) {
++      this._objectCache[aCacheId] = propCache;
++    }
++
++    return result;
++  },
++
++  destroy: function JST_destroy()
++  {
++    delete this._objectCache;
++    JSTerm = null;
++  },
++};
++
++let ConsoleAPIObserver = {
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
++
++  init: function CAO_init()
++  {
++    // TODO: address the problem of having this observer registered multiple
++    // times in the same process.
++    Services.obs.addObserver(this, "console-api-log-event", false);
++  },
++
++  observe: function CAO_observe(aMessage, aTopic, aData)
++  {
++    if (!aMessage || aTopic != "console-api-log-event") {
++      return;
++    }
++
++    let apiMessage = aMessage.wrappedJSObject;
++
++    let msgWindow =
++      WebConsoleUtils.getWindowByOuterId(apiMessage.ID, Manager.window);
++    if (!msgWindow || msgWindow.top != Manager.window) {
++      // not the same window!
++      return;
++    }
++
++    let messageToChrome = {
++      hudId: Manager.hudId,
++      id: Manager.sequenceId,
++      apiMessage: {},
++    };
++
++    messageToChrome.apiMessage =
++      WebConsoleUtils.cloneObject(apiMessage, true,
++        function(aKey, aValue, aObject) {
++          // We need to skip the arguments property from apiMessage for all
++          // messages, except for trace.
++          if (aKey == "wrappedJSObject" ||
++              aObject === apiMessage && aKey == "arguments" &&
++              apiMessage.level != "trace") {
++            return false;
++          }
++          return true;
++        });
++
++    // TODO: deal with passing result objects to other window.console API
++    // messages, beyond console.dir(). This is sufficient for parity with the
++    // current non-e10s Web Console code.
++
++    // FIXME for console.time and console.group
++    let mapFunction;
++    if (apiMessage.level == "dir" && apiMessage.arguments) {
++      messageToChrome.objectsCacheId = Manager.sequenceId;
++      messageToChrome.argumentsToString = [];
++      mapFunction = function(aItem) {
++        messageToChrome.argumentsToString.push(aItem.toString());
++        return Manager.prepareEvalResultObject(messageToChrome.objectsCacheId,
++                                              aItem);
++      };
++    }
++    else if (apiMessage.level != "dir" && apiMessage.level != "trace") {
++      mapFunction = function(aItem) {
++        return typeof aItem == "string" ? aItem :
++               WebConsoleUtils.formatResult(aItem);
++      };
++    }
++
++    if (apiMessage.arguments && mapFunction) {
++      messageToChrome.apiMessage.arguments =
++        Array.map(apiMessage.arguments, mapFunction);
++    }
++
++    sendAsyncMessage("WebConsole:ConsoleAPI", messageToChrome);
++  },
++
++  destroy: function CAO_destroy()
++  {
++    Services.obs.removeObserver(this, "console-api-log-event");
++    ConsoleAPIObserver = null;
++  },
++};
++
++Manager.init();
++})();
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -137,16 +137,26 @@ XPCOMUtils.defineLazyGetter(this, "names
+ });
+ 
+ XPCOMUtils.defineLazyGetter(this, "gConsoleStorage", function () {
+   let obj = {};
+   Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm", obj);
+   return obj.ConsoleAPIStorage;
+ });
+ 
++XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function () {
++  let obj = {};
++  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
++  return obj.WebConsoleUtils;
++});
++
++XPCOMUtils.defineLazyGetter(this, "l10n", function() {
++  return WebConsoleUtils.l10n;
++});
++
+ function LogFactory(aMessagePrefix)
+ {
+   function log(aMessage) {
+     var _msg = aMessagePrefix + " " + aMessage + "\n";
+     dump(_msg);
+   }
+   return log;
+ }
+diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
+--- a/browser/devtools/webconsole/Makefile.in
++++ b/browser/devtools/webconsole/Makefile.in
+@@ -43,16 +43,17 @@ srcdir		= @srcdir@
+ VPATH		= @srcdir@
+ 
+ include $(DEPTH)/config/autoconf.mk
+ 
+ EXTRA_JS_MODULES = \
+ 		PropertyPanel.jsm \
+ 		NetworkHelper.jsm \
+ 		AutocompletePopup.jsm \
++		WebConsoleUtils.jsm \
+ 		gcli.jsm \
+ 		GcliCommands.jsm \
+ 		GcliTiltCommands.jsm \
+ 		$(NULL)
+ 
+ EXTRA_PP_JS_MODULES = \
+ 		HUDService.jsm \
+ 		$(NULL)
+diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
+@@ -0,0 +1,730 @@
++/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* ***** BEGIN LICENSE BLOCK *****
++ * Version: MPL 1.1/GPL 2.0/LGPL 2.1
++ *
++ * The contents of this file are subject to the Mozilla Public License Version
++ * 1.1 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * http://www.mozilla.org/MPL/
++ *
++ * Software distributed under the License is distributed on an "AS IS" basis,
++ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
++ * for the specific language governing rights and limitations under the
++ * License.
++ *
++ * The Original Code is Web Console.
++ *
++ * The Initial Developer of the Original Code is
++ * The Mozilla Foundation
++ * Portions created by the Initial Developer are Copyright (C) 2011
++ * the Initial Developer. All Rights Reserved.
++ *
++ * Contributor(s):
++ *   Mihai Sucan <mihai.sucan@gmail.com>
++ *   David Dahl <ddahl@mozilla.com>
++ *   Rob Campbell <rcampbell@mozilla.com>
++ *   Johnathan Nightingale <jnightingale@mozilla.com>
++ *   Patrick Walton <pcwalton@mozilla.com>
++ *   Julian Viereck <jviereck@mozilla.com>
++ *
++ * Alternatively, the contents of this file may be used under the terms of
++ * either the GNU General Public License Version 2 or later (the "GPL"), or
++ * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
++ * in which case the provisions of the GPL or the LGPL are applicable instead
++ * of those above. If you wish to allow use of your version of this file only
++ * under the terms of either the GPL or the LGPL, and not to allow others to
++ * use your version of this file under the terms of the MPL, indicate your
++ * decision by deleting the provisions above and replace them with the notice
++ * and other provisions required by the GPL or the LGPL. If you do not delete
++ * the provisions above, a recipient may use your version of this file under
++ * the terms of any one of the MPL, the GPL or the LGPL.
++ *
++ * ***** END LICENSE BLOCK ***** */
++
++let Cc = Components.classes;
++let Ci = Components.interfaces;
++let Cu = Components.utils;
++
++Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++Cu.import("resource://gre/modules/Services.jsm");
++
++var EXPORTED_SYMBOLS = ["WebConsoleUtils"];
++
++const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
++
++const TYPES = { OBJECT: 0,
++                FUNCTION: 1,
++                ARRAY: 2,
++                OTHER: 3,
++                ITERATOR: 4,
++                GETTER: 5,
++                GENERATOR: 6,
++                STRING: 7
++              };
++
++var gObjectId = 0;
++
++var WebConsoleUtils = {
++  TYPES: TYPES,
++
++  /**
++   * Convenience function to unwrap a wrapped object.
++   *
++   * @param aObject the object to unwrap.
++   * @return aObject unwrapped.
++   */
++  unwrap: function WCU_unwrap(aObject)
++  {
++    try {
++      return XPCNativeWrapper.unwrap(aObject);
++    }
++    catch (ex) {
++      return aObject;
++    }
++  },
++
++  /**
++   * Clone an object.
++   *
++   * @param object aObject
++   *        The object you want cloned.
++   * @param boolean aRecursive
++   *        Tells if you want to dig deeper into the object, to clone
++   *        recursively.
++   * @param function [aFilter]
++   *        Optional, filter function, called for every property. Three
++   *        arguments are passed: key, value and object. Return true if the
++   *        property should be added to the cloned object. Return false to skip
++   *        the property.
++   * @return object
++   *         The cloned object.
++   */
++  cloneObject: function WCU_cloneObject(aObject, aRecursive, aFilter)
++  {
++    if (typeof aObject != "object") {
++      return aObject;
++    }
++
++    let temp;
++
++    if (Array.isArray(aObject)) {
++      temp = [];
++      Array.forEach(aObject, function(aValue, aIndex) {
++        if (!aFilter || aFilter(aIndex, aValue, aObject)) {
++          temp.push(aRecursive ? WCU_cloneObject(aValue) : aValue);
++        }
++      });
++    }
++    else {
++      temp = {};
++      for (let key in aObject) {
++        let value = aObject[key];
++        if (aObject.hasOwnProperty(key) &&
++            (!aFilter || aFilter(key, value, aObject))) {
++          temp[key] = aRecursive ? WCU_cloneObject(value) : value;
++        }
++      }
++    }
++
++    return temp;
++  },
++
++  /**
++   * Gets the ID of the inner window of this DOM window.
++   *
++   * @param nsIDOMWindow aWindow
++   * @return integer
++   *         Inner ID for the given aWindow.
++   */
++  getInnerWindowId: function WCU_getInnerWindowId(aWindow)
++  {
++    return aWindow.QueryInterface(Ci.nsIInterfaceRequestor).
++           getInterface(Ci.nsIDOMWindowUtils).currentInnerWindowID;
++  },
++
++  /**
++   * Gets the ID of the outer window of this DOM window.
++   *
++   * @param nsIDOMWindow aWindow
++   * @return integer
++   *         Outer ID for the given aWindow.
++   */
++  getOuterWindowId: function WCU_getOuterWindowId(aWindow)
++  {
++    return aWindow.QueryInterface(Ci.nsIInterfaceRequestor).
++           getInterface(Ci.nsIDOMWindowUtils).outerWindowID;
++  },
++
++  /**
++   * Gets the window that has the given outer ID.
++   *
++   * @param integer aOuterId
++   * @param nsIDOMWindow [aHintWindow]
++   *        Optional, the window object used to QueryInterface to
++   *        nsIDOMWindowUtils. If this is not given,
++   *        Services.wm.getMostRecentWindow() is used.
++   * @return nsIDOMWindow|null
++   *         The window object with the given outer ID.
++   */
++  getWindowByOuterId: function WCU_getWindowByOuterId(aOuterId, aHintWindow)
++  {
++    let someWindow = aHintWindow || Services.wm.getMostRecentWindow(null);
++    let content = null;
++
++    if (someWindow) {
++      let windowUtils = someWindow.QueryInterface(Ci.nsIInterfaceRequestor).
++                                   getInterface(Ci.nsIDOMWindowUtils);
++      content = windowUtils.getOuterWindowWithId(aOuterId);
++    }
++
++    return content;
++  },
++
++  /**
++   * Gets the window that has the given inner ID.
++   *
++   * @param integer aInnerId
++   * @param nsIDOMWindow [aHintWindow]
++   *        Optional, the window object used to QueryInterface to
++   *        nsIDOMWindowUtils. If this is not given,
++   *        Services.wm.getMostRecentWindow() is used.
++   * @return nsIDOMWindow|null
++   *         The window object with the given inner ID.
++   */
++  getWindowByInnerId: function WCU_getWindowByInnerId(aInnerId, aHintWindow)
++  {
++    let someWindow = aHintWindow || Services.wm.getMostRecentWindow(null);
++    let content = null;
++
++    if (someWindow) {
++      let windowUtils = someWindow.QueryInterface(Ci.nsIInterfaceRequestor).
++                                   getInterface(Ci.nsIDOMWindowUtils);
++      content = windowUtils.getInnerWindowWithId(aInnerId);
++    }
++
++    return content;
++  },
++
++  /**
++   * Abbreviates the given source URL so that it can be displayed flush-right
++   * without being too distracting.
++   *
++   * @param string aSourceURL
++   *        The source URL to shorten.
++   * @return string
++   *         The abbreviated form of the source URL.
++   */
++  abbreviateSourceURL: function WCU_abbreviateSourceURL(aSourceURL)
++  {
++    // Remove any query parameters.
++    let hookIndex = aSourceURL.indexOf("?");
++    if (hookIndex > -1) {
++      aSourceURL = aSourceURL.substring(0, hookIndex);
++    }
++
++    // Remove a trailing "/".
++    if (aSourceURL[aSourceURL.length - 1] == "/") {
++      aSourceURL = aSourceURL.substring(0, aSourceURL.length - 1);
++    }
++
++    // Remove all but the last path component.
++    let slashIndex = aSourceURL.lastIndexOf("/");
++    if (slashIndex > -1) {
++      aSourceURL = aSourceURL.substring(slashIndex + 1);
++    }
++
++    return aSourceURL;
++  },
++
++  /**
++   * Format the jsterm execution result based on its type.
++   *
++   * @param mixed aResult
++   *        The evaluation result object you want displayed.
++   * @return string
++   *         The string that can be displayed.
++   */
++  formatResult: function WCU_formatResult(aResult)
++  {
++    let output = "";
++    let type = this.getResultType(aResult);
++
++    switch (type) {
++      case "string":
++        output = this.formatResultString(aResult);
++        break;
++      case "boolean":
++      case "date":
++      case "error":
++      case "number":
++      case "regexp":
++        output = aResult.toString();
++        break;
++      case "null":
++      case "undefined":
++        output = type;
++        break;
++      default:
++        if (aResult.toSource) {
++          try {
++            output = aResult.toSource();
++          } catch (ex) { }
++        }
++        if (!output || output == "({})") {
++          output = aResult.toString();
++        }
++        break;
++    }
++
++    return output;
++  },
++
++  /**
++   * Format a string for output.
++   *
++   * @param string aString
++   *        The string you want to display.
++   * @return string
++   *         The string that can be displayed.
++   */
++  formatResultString: function WCU_formatResultString(aString)
++  {
++    function isControlCode(c) {
++      // See http://en.wikipedia.org/wiki/C0_and_C1_control_codes
++      // C0 is 0x00-0x1F, C1 is 0x80-0x9F (inclusive).
++      // We also include DEL (U+007F) and NBSP (U+00A0), which are not strictly
++      // in C1 but border it.
++      return (c <= 0x1F) || (0x7F <= c && c <= 0xA0);
++    }
++
++    function replaceFn(aMatch, aType, aHex) {
++      // Leave control codes escaped, but unescape the rest of the characters.
++      let c = parseInt(aHex, 16);
++      return isControlCode(c) ? aMatch : String.fromCharCode(c);
++    }
++
++    let output = uneval(aString).replace(/\\(x)([0-9a-fA-F]{2})/g, replaceFn)
++                 .replace(/\\(u)([0-9a-fA-F]{4})/g, replaceFn);
++
++    return output;
++  },
++
++  /**
++   * Determine if the jsterm execution result is inspectable or not.
++   *
++   * @param mixed aResult
++   *        The evaluation result object you want to check if it is inspectable.
++   * @return boolean
++   *         True if the object is inspectable or false otherwise.
++   */
++  isResultInspectable: function WCU_isResultInspectable(aResult)
++  {
++    let isEnumerable = false;
++
++    // Skip Iterators and Generators.
++    if (this.isIteratorOrGenerator(aResult)) {
++      return false;
++    }
++
++    try {
++      for (let p in aResult) {
++        isEnumerable = true;
++        break;
++      }
++    }
++    catch (ex) {
++      // Proxy objects can lack an enumerable method.
++    }
++
++    return isEnumerable && typeof(aResult) != "string";
++  },
++
++  /**
++   * Determine the type of the jsterm execution result.
++   *
++   * @param mixed aResult
++   *        The evaluation result object you want to check.
++   * @return string
++   *         Constructor name or type: string, number, boolean, regexp, date,
++   *         function, object, null, undefined...
++   */
++  getResultType: function WCU_getResultType(aResult)
++  {
++    let type = aResult === null ? "null" : typeof aResult;
++    if (type == "object" && aResult.constructor && aResult.constructor.name) {
++      type = aResult.constructor.name;
++    }
++
++    return type.toLowerCase();
++  },
++
++  /**
++   * Figures out the type of aObject and the string to display as the object
++   * value.
++   *
++   * @param object aObject
++   *        The object to operate on.
++   * @return object
++   *         An object of the form:
++   *         {
++   *           type: TYPES.OBJECT || TYPES.FUNCTION || ...
++   *           display: string for displaying the object
++   *         }
++   */
++  presentableValueFor: function WCU_presentableValueFor(aObject)
++  {
++    let type = this.getResultType(aObject);
++    let presentable;
++
++    switch (type) {
++      case "undefined":
++      case "null":
++        return {
++          type: TYPES.OTHER,
++          display: type
++        };
++
++      case "array":
++        return {
++          type: TYPES.ARRAY,
++          display: "Array"
++        };
++
++      case "string":
++        return {
++          type: TYPES.STRING,
++          display: "\"" + aObject + "\""
++        };
++
++      case "date":
++      case "regexp":
++      case "number":
++      case "boolean":
++        return {
++          type: TYPES.OTHER,
++          display: aObject.toString()
++        };
++
++      case "iterator":
++        return {
++          type: TYPES.ITERATOR,
++          display: "Iterator"
++        };
++
++      case "function":
++        presentable = aObject.toString();
++        return {
++          type: TYPES.FUNCTION,
++          display: presentable.substring(0, presentable.indexOf(')') + 1)
++        };
++
++      default:
++        presentable = aObject.toString();
++        let m = /^\[object (\S+)\]/.exec(presentable);
++
++        try {
++          if (type == "object" && typeof aObject.next == "function" &&
++              m && m[1] == "Generator") {
++            return {
++              type: TYPES.GENERATOR,
++              display: m[1]
++            };
++          }
++        }
++        catch (ex) {
++          // window.history.next throws in the typeof check above.
++          return {
++            type: TYPES.OBJECT,
++            display: m ? m[1] : "Object"
++          };
++        }
++
++        if (type == "object" && typeof aObject.__iterator__ == "function") {
++          return {
++            type: TYPES.ITERATOR,
++            display: "Iterator"
++          };
++        }
++
++        return {
++          type: TYPES.OBJECT,
++          display: m ? m[1] : "Object"
++        };
++    }
++  },
++
++  /**
++   * Tells if the given function is native or not.
++   *
++   * @param function aFunction
++   *        The function you want to check if it is native or not.
++   *
++   * @return boolean
++   *         True if the given function is native, false otherwise.
++   */
++  isNativeFunction: function WCU_isNativeFunction(aFunction)
++  {
++    return typeof aFunction == "function" && !("prototype" in aFunction);
++  },
++
++  /**
++   * Tells if the given property of the provided object is a non-native getter or
++   * not.
++   *
++   * @param object aObject
++   *        The object that contains the property.
++   *
++   * @param string aProp
++   *        The property you want to check if it is a getter or not.
++   *
++   * @return boolean
++   *         True if the given property is a getter, false otherwise.
++   */
++  isNonNativeGetter: function WCU_isNonNativeGetter(aObject, aProp)
++  {
++    if (typeof aObject != "object") {
++      return false;
++    }
++    let desc;
++    while (aObject) {
++      try {
++        if (desc = Object.getOwnPropertyDescriptor(aObject, aProp)) {
++          break;
++        }
++      }
++      catch (ex) {
++        // Native getters throw here. See bug 520882.
++        if (ex.name == "NS_ERROR_XPC_BAD_CONVERT_JS" ||
++            ex.name == "NS_ERROR_XPC_BAD_OP_ON_WN_PROTO") {
++          return false;
++        }
++        throw ex;
++      }
++      aObject = Object.getPrototypeOf(aObject);
++    }
++    if (desc && desc.get && !this.isNativeFunction(desc.get)) {
++      return true;
++    }
++    return false;
++  },
++
++  /**
++   * Get an array that describes the properties of the given object.
++   *
++   * @param object aObject
++   *        The object to get the properties from.
++   * @param object aObjectCache
++   *        Optional object cache where to store references to properties of
++   *        aObject that are inspectable.
++   * @return array
++   *         An array that describes each property from the given object. Each
++   *         array element is an object (a property descriptor). Each property
++   *         descriptor has the following properties:
++   *         - name - property name
++   *         - value - a presentable property value representation (see
++   *                   this.presentableValueFor())
++   *         - type - value type (see this.presentableValueFor())
++   *         - inspectable - tells if the property value holds further
++   *                         properties.
++   *         - objectId - optional, available only if aObjectCache is given and
++   *         if |inspectable| is true. You can do
++   *         aObjectCache[propertyDescriptor.objectId] to get the actual object
++   *         referenced by the property of aObject.
++   */
++  namesAndValuesOf: function WCU_namesAndValuesOf(aObject, aObjectCache)
++  {
++    let pairs = [];
++    let value, presentable;
++
++    let isDOMDocument = aObject instanceof Ci.nsIDOMDocument;
++
++    for (let propName in aObject) {
++      // See bug 632275: skip deprecated width and height properties.
++      if (isDOMDocument && (propName == "width" || propName == "height")) {
++        continue;
++      }
++
++      // Also skip non-native getters.
++      if (this.isNonNativeGetter(aObject, propName)) {
++        value = "";
++        presentable = {type: TYPES.GETTER, display: "Getter"};
++      }
++      else {
++        value = aObject[propName];
++        presentable = this.presentableValueFor(value);
++      }
++
++      let pair = {};
++      pair.name = propName;
++      pair.value = presentable.display;
++      pair.inspectable = false;
++      pair.type = presentable.type;
++
++      switch (presentable.type) {
++        case TYPES.GETTER:
++        case TYPES.ITERATOR:
++        case TYPES.GENERATOR:
++        case TYPES.STRING:
++          break;
++        default:
++          try {
++            for (let p in value) {
++              pair.inspectable = true;
++              break;
++            }
++          }
++          catch (ex) { }
++          break;
++      }
++
++      // Store the inspectable object.
++      if (pair.inspectable && aObjectCache) {
++        pair.objectId = ++gObjectId;
++        aObjectCache[pair.objectId] = value;
++      }
++
++      pairs.push(pair);
++    }
++
++    pairs.sort(function(a, b)
++    {
++      // Convert the pair.name to a number for later sorting.
++      let aNumber = parseFloat(a.name);
++      let bNumber = parseFloat(b.name);
++
++      // Sort numbers.
++      if (!isNaN(aNumber) && isNaN(bNumber)) {
++        return -1;
++      }
++      else if (isNaN(aNumber) && !isNaN(bNumber)) {
++        return 1;
++      }
++      else if (!isNaN(aNumber) && !isNaN(bNumber)) {
++        return aNumber - bNumber;
++      }
++      // Sort string.
++      else if (a.name < b.name) {
++        return -1;
++      }
++      else if (a.name > b.name) {
++        return 1;
++      }
++      else {
++        return 0;
++      }
++    });
++
++    return pairs;
++  },
++
++  /**
++   * Check if the given object is an iterator or a generator.
++   *
++   * @param object aObject
++   *        The object you want to check.
++   * @return boolean
++   *         True if the given object is an iterator or a generator, otherwise
++   *         false is returned.
++   */
++  isIteratorOrGenerator: function WCU_isIteratorOrGenerator(aObject)
++  {
++    if (aObject === null) {
++      return false;
++    }
++
++    if (typeof aObject == "object") {
++      if (typeof aObject.__iterator__ == "function" ||
++          aObject.constructor && aObject.constructor.name == "Iterator") {
++        return true;
++      }
++
++      try {
++        let str = aObject.toString();
++        if (typeof aObject.next == "function" &&
++            str.indexOf("[object Generator") == 0) {
++          return true;
++        }
++      }
++      catch (ex) {
++        // window.history.next throws in the typeof check above.
++        return false;
++      }
++    }
++
++    return false;
++  },
++};
++
++//////////////////////////////////////////////////////////////////////////
++// Localization
++//////////////////////////////////////////////////////////////////////////
++
++WebConsoleUtils.l10n = {
++  /**
++   * Generates a formatted timestamp string for displaying in console messages.
++   *
++   * @param integer [aMilliseconds]
++   *        Optional, allows you to specify the timestamp in milliseconds since
++   *        the UNIX epoch.
++   * @return string
++   *         The timestamp formatted for display.
++   */
++  timestampString: function WCU_l10n_timestampString(aMilliseconds)
++  {
++    let d = new Date(aMilliseconds ? aMilliseconds : null);
++    let hours = d.getHours(), minutes = d.getMinutes();
++    let seconds = d.getSeconds(), milliseconds = d.getMilliseconds();
++    let parameters = [ hours, minutes, seconds, milliseconds ];
++    return this.getFormatStr("timestampFormat", parameters);
++  },
++
++  /**
++   * Retrieve a localized string.
++   *
++   * @param string aName
++   *        The string name you want from the Web Console string bundle.
++   * @return string
++   *         The localized string.
++   */
++  getStr: function WCU_l10n_getStr(aName)
++  {
++    let result;
++    try {
++      result = this.stringBundle.GetStringFromName(aName);
++    }
++    catch (ex) {
++      Cu.reportError("Failed to get string: " + aName);
++      throw ex;
++    }
++    return result;
++  },
++
++  /**
++   * Retrieve a localized string formatted with values coming from the given
++   * array.
++   *
++   * @param string aName
++   *        The string name you want from the Web Console string bundle.
++   * @param array aArray
++   *        The array of values you want in the formatted string.
++   * @return string
++   *         The formatted local string.
++   */
++  getFormatStr: function WCU_l10n_getFormatStr(aName, aArray)
++  {
++    let result;
++    try {
++      result = this.stringBundle.formatStringFromName(aName, aArray, aArray.length);
++    }
++    catch (ex) {
++      Cu.reportError("Failed to format string: " + aName);
++      throw ex;
++    }
++    return result;
++  },
++};
++
++XPCOMUtils.defineLazyGetter(WebConsoleUtils.l10n, "stringBundle", function() {
++  return Services.strings.createBundle(STRINGS_URI);
++});
