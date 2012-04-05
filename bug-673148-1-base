@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 811fcd591b181326fb37e5d7b318e2127b1ec7b2
+# Parent 5d654a428c971c877dc9bf72727f4c47004e5e3e
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1333571064 -10800
+# Date 1333658724 -10800
 
 Bug 673148 - (async-webconsole) Part 1 - Make console API async
 
@@ -488,7 +488,54 @@ new file mode 100644
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -137,16 +137,26 @@ XPCOMUtils.defineLazyGetter(this, "names
+@@ -49,17 +49,16 @@ const Cc = Components.classes;
+ const Ci = Components.interfaces;
+ const Cu = Components.utils;
+ 
+ const CONSOLEAPI_CLASS_ID = "{b49c18f8-3379-4fc0-8c90-d7772c1a9ff3}";
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource:///modules/NetworkHelper.jsm");
+-Cu.import("resource:///modules/PropertyPanel.jsm");
+ 
+ var EXPORTED_SYMBOLS = ["HUDService", "ConsoleUtils"];
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "scriptError",
+                                    "@mozilla.org/scripterror;1",
+                                    "nsIScriptError");
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "activityDistributor",
+@@ -103,16 +102,28 @@ XPCOMUtils.defineLazyGetter(this, "Prope
+   try {
+     Cu.import("resource:///modules/PropertyPanel.jsm", obj);
+   } catch (err) {
+     Cu.reportError(err);
+   }
+   return obj.PropertyPanel;
+ });
+ 
++XPCOMUtils.defineLazyGetter(this, "PropertyPanelAsync", function () {
++  let obj = {};
++  Cu.import("resource:///modules/PropertyPanelAsync.jsm", obj);
++  return obj.PropertyPanel;
++});
++
++XPCOMUtils.defineLazyGetter(this, "PropertyTreeViewAsync", function () {
++  let obj = {};
++  Cu.import("resource:///modules/PropertyPanelAsync.jsm", obj);
++  return obj.PropertyTreeView;
++});
++
+ XPCOMUtils.defineLazyGetter(this, "AutocompletePopup", function () {
+   var obj = {};
+   try {
+     Cu.import("resource:///modules/AutocompletePopup.jsm", obj);
+   }
+   catch (err) {
+     Cu.reportError(err);
+   }
+@@ -137,16 +148,26 @@ XPCOMUtils.defineLazyGetter(this, "names
  });
  
  XPCOMUtils.defineLazyGetter(this, "gConsoleStorage", function () {
@@ -515,7 +562,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    }
    return log;
  }
-@@ -294,16 +304,19 @@ const MINIMUM_CONSOLE_HEIGHT = 150;
+@@ -294,16 +315,19 @@ const MINIMUM_CONSOLE_HEIGHT = 150;
  const MINIMUM_PAGE_HEIGHT = 50;
  
  // The default console height, as a ratio from the content window inner height.
@@ -535,7 +582,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  };
  
  // The indent of a console group in pixels.
-@@ -658,17 +671,17 @@ function unwrap(aObject)
+@@ -658,17 +682,17 @@ function unwrap(aObject)
   */
  function NetworkPanel(aParent, aHttpActivity)
  {
@@ -554,7 +601,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    // Create the iframe that displays the NetworkPanel XHTML.
    this.iframe = createAndAppendElement(this.panel, "iframe", {
-@@ -744,17 +757,17 @@ NetworkPanel.prototype =
+@@ -744,17 +768,17 @@ NetworkPanel.prototype =
     *        "NetworkPanel." before calling the HUDService.getFormatStr function.
     * @param array aArray
     *        Values used as placeholder for the i10n string.
@@ -573,7 +620,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * the content type is tried to be estimated by the url file ending.
     *
     * @returns string or null
-@@ -944,17 +957,17 @@ NetworkPanel.prototype =
+@@ -944,17 +968,17 @@ NetworkPanel.prototype =
    {
      let timing = this.httpActivity.timing;
      let request = this.httpActivity.request;
@@ -592,7 +639,49 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
        let cookies = request.header.Cookie.split(";");
        let cookieList = {};
-@@ -1391,91 +1404,31 @@ HUD_SERVICE.prototype =
+@@ -1289,29 +1313,35 @@ function pruneConsoleOutputIfNecessary(a
+   let oldScrollHeight = scrollBox.scrollHeight;
+   let scrolledToBottom = ConsoleUtils.isOutputScrolledToBottom(outputNode);
+ 
+   // Prune the nodes.
+   let messageNodes = outputNode.querySelectorAll(".webconsole-msg-" +
+       CATEGORY_CLASS_FRAGMENTS[aCategory]);
+   let removeNodes = messageNodes.length - logLimit;
+   for (let i = 0; i < removeNodes; i++) {
+-    if (messageNodes[i].classList.contains("webconsole-msg-cssparser")) {
++    let node = messageNodes[i];
++    if (node._evalCacheId && !node._panelOpen) {
++      hudRef.jsterm.clearObjectCache(node._evalCacheId);
++    }
++
++    if (node.classList.contains("webconsole-msg-cssparser")) {
+       let desc = messageNodes[i].childNodes[2].textContent;
+       let location = "";
+-      if (messageNodes[i].childNodes[4]) {
+-        location = messageNodes[i].childNodes[4].getAttribute("title");
++      if (node.childNodes[4]) {
++        location = node.childNodes[4].getAttribute("title");
+       }
+       delete hudRef.cssNodes[desc + location];
+     }
+-    else if (messageNodes[i].classList.contains("webconsole-msg-inspector")) {
+-      hudRef.pruneConsoleDirNode(messageNodes[i]);
++    else if (node.classList.contains("webconsole-msg-inspector")) {
++      hudRef.pruneConsoleDirNode(node);
+       continue;
+     }
+-    messageNodes[i].parentNode.removeChild(messageNodes[i]);
++
++    node.parentNode.removeChild(node);
+   }
+ 
+   if (!scrolledToBottom && removeNodes > 0 &&
+       oldScrollHeight != scrollBox.scrollHeight) {
+     scrollBox.scrollTop -= oldScrollHeight - scrollBox.scrollHeight;
+   }
+ 
+   return logLimit;
+@@ -1391,91 +1421,31 @@ HUD_SERVICE.prototype =
     * @returns string
     */
    getStr: function HS_getStr(aName)
@@ -684,7 +773,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Tell the HUDService that a HeadsUpDisplay can be activated
     * for the window or context that has 'aContextDOMId' node id
-@@ -1998,17 +1951,17 @@ HUD_SERVICE.prototype =
+@@ -1998,17 +1968,17 @@ HUD_SERVICE.prototype =
     * Returns the hudId that is corresponding to the hud activated for the
     * passed aContentWindow. If there is no matching hudId null is returned.
     *
@@ -703,12 +792,50 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param string aId
     * @returns Object
-@@ -2095,22 +2048,22 @@ HUD_SERVICE.prototype =
+@@ -2062,55 +2032,42 @@ HUD_SERVICE.prototype =
+    * @param object aMessage
+    *        The message reported by the console service.
+    * @return void
+    */
+   logConsoleAPIMessage: function HS_logConsoleAPIMessage(aHUDId, aMessage)
+   {
+     // Pipe the message to createMessageNode().
+     let hud = HUDService.hudReferences[aHUDId];
+-    function formatResult(x) {
+-      if (typeof(x) == "string") {
+-        return x;
+-      }
+-      if (hud.gcliterm) {
+-        return hud.gcliterm.formatResult(x);
+-      }
+-      if (hud.jsterm) {
+-        return hud.jsterm.formatResult(x);
+-      }
+-      return x;
+-    }
+ 
+     let body = null;
+     let clipboardText = null;
+     let sourceURL = null;
+     let sourceLine = 0;
+-    let level = aMessage.level;
+-    let args = aMessage.arguments;
++    let level = aMessage.apiMessage.level;
++    let args = aMessage.apiMessage.arguments;
+ 
+     switch (level) {
+       case "log":
+       case "info":
+       case "warn":
+       case "error":
        case "debug":
-         let mappedArguments = Array.map(args, formatResult);
-         body = Array.join(mappedArguments, " ");
-         sourceURL = aMessage.filename;
-         sourceLine = aMessage.lineNumber;
+-        let mappedArguments = Array.map(args, formatResult);
+-        body = Array.join(mappedArguments, " ");
+-        sourceURL = aMessage.filename;
+-        sourceLine = aMessage.lineNumber;
++        body = args.join(" ");
++        sourceURL = aMessage.apiMessage.filename;
++        sourceLine = aMessage.apiMessage.lineNumber;
          break;
  
        case "trace":
@@ -729,7 +856,44 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          clipboardText = "";
  
          args.forEach(function(aFrame) {
-@@ -2143,30 +2096,30 @@ HUD_SERVICE.prototype =
+@@ -2118,58 +2075,64 @@ HUD_SERVICE.prototype =
+                            aFrame.functionName + " :: " +
+                            aFrame.lineNumber + "\n";
+         });
+ 
+         clipboardText = clipboardText.trimRight();
+         break;
+ 
+       case "dir":
+-        body = unwrap(args[0]);
+-        clipboardText = body.toString();
+-        sourceURL = aMessage.filename;
+-        sourceLine = aMessage.lineNumber;
++        body = {
++          cacheId: aMessage.objectsCacheId,
++          resultString: aMessage.argumentsToString[0],
++          remoteObject: aMessage.apiMessage.arguments[0],
++          remoteObjectProvider: hud.jsterm.remoteObjectProvider.bind(hud.jsterm),
++        };
++        clipboardText = body.resultString;
++        sourceURL = aMessage.apiMessage.filename;
++        sourceLine = aMessage.apiMessage.lineNumber;
+         break;
+ 
++      // FIXME
+       case "group":
+       case "groupCollapsed":
+         clipboardText = body = formatResult(args);
+-        sourceURL = aMessage.filename;
+-        sourceLine = aMessage.lineNumber;
++        sourceURL = aMessage.apiMessage.filename;
++        sourceLine = aMessage.apiMessage.lineNumber;
+         hud.groupDepth++;
+         break;
+ 
+       case "groupEnd":
+         if (hud.groupDepth > 0) {
+           hud.groupDepth--;
          }
          return;
  
@@ -745,8 +909,10 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -        body = this.getFormatStr("timerStarted", [args.name]);
 +        body = l10n.getFormatStr("timerStarted", [args.name]);
          clipboardText = body;
-         sourceURL = aMessage.filename;
-         sourceLine = aMessage.lineNumber;
+-        sourceURL = aMessage.filename;
+-        sourceLine = aMessage.lineNumber;
++        sourceURL = aMessage.apiMessage.filename;
++        sourceLine = aMessage.apiMessage.lineNumber;
          break;
  
        case "timeEnd":
@@ -756,14 +922,86 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -        body = this.getFormatStr("timeEnd", [args.name, args.duration]);
 +        body = l10n.getFormatStr("timeEnd", [args.name, args.duration]);
          clipboardText = body;
-         sourceURL = aMessage.filename;
-         sourceLine = aMessage.lineNumber;
+-        sourceURL = aMessage.filename;
+-        sourceLine = aMessage.lineNumber;
++        sourceURL = aMessage.apiMessage.filename;
++        sourceLine = aMessage.apiMessage.lineNumber;
          break;
  
        default:
          Cu.reportError("Unknown Console API log level: " + level);
          return;
-@@ -2285,17 +2238,17 @@ HUD_SERVICE.prototype =
+     }
+ 
+     let node = ConsoleUtils.createMessageNode(hud.outputNode.ownerDocument,
+@@ -2181,52 +2144,43 @@ HUD_SERVICE.prototype =
+                                               sourceLine,
+                                               clipboardText,
+                                               level,
+                                               aMessage.timeStamp);
+ 
+     // Make the node bring up the property panel, to allow the user to inspect
+     // the stack trace.
+     if (level == "trace") {
+-      node._stacktrace = args;
+-
+-      let linkNode = node.querySelector(".webconsole-msg-body");
+-      linkNode.classList.add("hud-clickable");
+-      linkNode.setAttribute("aria-haspopup", "true");
+-
+-      node.addEventListener("mousedown", function(aEvent) {
+-        this._startX = aEvent.clientX;
+-        this._startY = aEvent.clientY;
+-      }, false);
+-
+-      node.addEventListener("click", function(aEvent) {
+-        if (aEvent.detail != 1 || aEvent.button != 0 ||
+-            (this._startX != aEvent.clientX &&
+-             this._startY != aEvent.clientY)) {
++      hud.makeOutputMessageLink(node, function _traceNodeClickCallback() {
++        if (node._panelOpen) {
+           return;
+         }
+ 
+-        if (!this._panelOpen) {
+-          let propPanel = hud.jsterm.openPropertyPanel(null,
+-                                                       node._stacktrace,
+-                                                       this);
+-          propPanel.panel.setAttribute("hudId", aHUDId);
+-          this._panelOpen = true;
+-        }
+-      }, false);
++        let options = {
++          anchor: node,
++          data: { object: args },
++        };
++
++        let propPanel = hud.jsterm.openPropertyPanelAsync(options);
++        propPanel.panel.setAttribute("hudId", aHUDId);
++      });
+     }
+ 
+     ConsoleUtils.outputMessageNode(node, aHUDId);
+ 
+     if (level == "dir") {
+       // Initialize the inspector message node, by setting the PropertyTreeView
+       // object on the tree view. This has to be done *after* the node is
+       // shown, because the tree binding must be attached first.
+       let tree = node.querySelector("tree");
+       tree.view = node.propertyTreeView;
++
++      // Make sure the cached evaluated object will be purged when the node is
++      // removed.
++      node._evalCacheId = aMessage.objectsCacheId;
+     }
+   },
+ 
+   /**
+    * Inform user that the Web Console API has been replaced by a script
+    * in a content page.
+    *
+    * @param string aHUDId
+@@ -2285,17 +2239,17 @@ HUD_SERVICE.prototype =
      // Warnings and legacy strict errors become warnings; other types become
      // errors.
      let severity = SEVERITY_ERROR;
@@ -782,7 +1020,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
          let node = ConsoleUtils.createMessageNode(chromeDocument,
                                                    category,
-@@ -2606,17 +2559,17 @@ HUD_SERVICE.prototype =
+@@ -2606,17 +2560,17 @@ HUD_SERVICE.prototype =
                                  timing.REQUEST_HEADER) / 1000);
  
                  // Add the request duration.
@@ -801,7 +1039,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
                    [ httpActivity.method, httpActivity.url, fullStatusText ];
                  msgObject.messageNode.clipboardText =
                    clipboardTextPieces.join(" ");
-@@ -2954,17 +2907,17 @@ HUD_SERVICE.prototype =
+@@ -2954,17 +2908,17 @@ HUD_SERVICE.prototype =
        // get nBox object and call new HUD
        let config = { parentNode: nBox,
                       contentWindow: aContentWindow.top
@@ -820,7 +1058,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          Ci.nsIWebProgress.NOTIFY_STATE_ALL);
  
        hud.displayCachedConsoleMessages();
-@@ -3135,17 +3088,17 @@ HUD_SERVICE.prototype =
+@@ -3135,17 +3089,17 @@ HUD_SERVICE.prototype =
        // copied output.
        if (i > 0 && item.classList.contains("webconsole-new-group")) {
          newGroup = true;
@@ -839,7 +1077,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        }
      }
      clipboardHelper.copyString(strings.join("\n"));
-@@ -3245,16 +3198,21 @@ function HeadsUpDisplay(aConfig)
+@@ -3245,16 +3199,22 @@ function HeadsUpDisplay(aConfig)
      this.parentNode = parentNode;
      this.notificationBox = parentNode;
    }
@@ -848,6 +1086,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    this.textFactory = NodeFactory("text", "xul", this.chromeDocument);
  
    this.chromeWindow = this.chromeDocument.defaultView;
++  this.browser = this.tab.linkedBrowser;
 +  this.messageManager = this.browser.messageManager;
 +
 +  // Track callback functions registered for specific async requests sent to the
@@ -861,7 +1100,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    // create the JSTerm input element
    try {
      this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
-@@ -3266,19 +3224,29 @@ function HeadsUpDisplay(aConfig)
+@@ -3266,19 +3226,29 @@ function HeadsUpDisplay(aConfig)
      }
    }
    catch (ex) {
@@ -891,7 +1130,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    groupDepth: 0,
  
-@@ -3460,17 +3428,17 @@ HeadsUpDisplay.prototype = {
+@@ -3460,17 +3430,17 @@ HeadsUpDisplay.prototype = {
    /**
     * Retrieve the Web Console panel title.
     *
@@ -910,7 +1149,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      window: null
    },
  
-@@ -3565,39 +3533,16 @@ HeadsUpDisplay.prototype = {
+@@ -3565,39 +3535,16 @@ HeadsUpDisplay.prototype = {
        this.jsterm.inputNode.focus();
      }
      if (this.gcliterm) {
@@ -950,7 +1189,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * The GcliTerm object that contains the console's GCLI
     */
-@@ -3639,17 +3584,17 @@ HeadsUpDisplay.prototype = {
+@@ -3639,17 +3586,17 @@ HeadsUpDisplay.prototype = {
    /**
     * Display cached messages that may have been collected before the UI is
     * displayed.
@@ -969,7 +1208,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Filter the errors to find only those we should display.
      let filteredErrors = (errors.value || []).filter(function(aError) {
-@@ -3759,17 +3704,17 @@ HeadsUpDisplay.prototype = {
+@@ -3759,17 +3706,17 @@ HeadsUpDisplay.prototype = {
      consoleWrap.setAttribute("flex", "1");
  
      this.filterSpacer = this.makeXULNode("spacer");
@@ -988,7 +1227,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      this.filterPrefs = HUDService.getDefaultFilterPrefs(this.hudId);
  
-@@ -3937,38 +3882,38 @@ HeadsUpDisplay.prototype = {
+@@ -3937,38 +3884,38 @@ HeadsUpDisplay.prototype = {
        this.positionConsole("below");
      }).bind(this);
      this._positionConsoleWindow = (function HUD_positionWindow() {
@@ -1032,7 +1271,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.positionMenuitems = {
        last: null,
        above: itemAbove,
-@@ -3991,38 +3936,38 @@ HeadsUpDisplay.prototype = {
+@@ -3991,38 +3938,38 @@ HeadsUpDisplay.prototype = {
      let id = this.hudId + "-output-contextmenu";
      menuPopup.setAttribute("id", id);
      menuPopup.addEventListener("popupshowing", function() {
@@ -1077,7 +1316,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      aConsoleWrapper.appendChild(menuPopup);
      aConsoleWrapper.setAttribute("context", id);
    },
-@@ -4043,30 +3988,30 @@ HeadsUpDisplay.prototype = {
+@@ -4043,30 +3990,30 @@ HeadsUpDisplay.prototype = {
      let toolbarButton = this.makeXULNode("toolbarbutton");
      aParent.appendChild(toolbarButton);
  
@@ -1111,7 +1350,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        menuItem.setAttribute("prefKey", prefKey);
  
        let checked = this.filterPrefs[prefKey];
-@@ -4123,17 +4068,17 @@ HeadsUpDisplay.prototype = {
+@@ -4123,17 +4070,17 @@ HeadsUpDisplay.prototype = {
          hud.jsterm.clearOutput(true);
        }
        if (hud.gcliterm) {
@@ -1130,16 +1369,15 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Destroy the property inspector message node. This performs the necessary
-@@ -4207,58 +4152,105 @@ HeadsUpDisplay.prototype = {
-     this.positionMenuitems.below.removeEventListener("command",
-       this._positionConsoleBelow, false);
-     this.positionMenuitems.window.removeEventListener("command",
-       this._positionConsoleWindow, false);
- 
-     this.closeButton.removeEventListener("command",
-       this.closeButtonOnCommand, false);
+@@ -4184,29 +4131,132 @@ HeadsUpDisplay.prototype = {
    },
-+
+ 
+   ERRORS: {
+     HUD_BOX_DOES_NOT_EXIST: "Heads Up Display does not exist",
+     TAB_ID_REQUIRED: "Tab DOM ID is required",
+     PARENTNODE_NOT_FOUND: "parentNode element not found"
+   },
+ 
 +  setupMessageManager: function HUD_setupMessageManager()
 +  {
 +    this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
@@ -1202,12 +1440,69 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +    this.messageManager.sendAsyncMessage(aName, aMessage);
 +  },
- };
++
++  // TODO: add a comment.
++  makeOutputMessageLink: function HUD_makeOutputMessageLink(aNode, aCallback)
++  {
++    let linkNode;
++    if (aNode.category === CATEGORY_NETWORK) {
++      linkNode = aNode.querySelector(".webconsole-msg-link");
++    }
++    else {
++      linkNode = aNode.querySelector(".webconsole-msg-body");
++      linkNode.classList.add("hud-clickable");
++    }
++
++    linkNode.setAttribute("aria-haspopup", "true");
++
++    aNode.addEventListener("mousedown", function(aEvent) {
++      this._startX = aEvent.clientX;
++      this._startY = aEvent.clientY;
++    }, false);
++
++    aNode.addEventListener("click", function(aEvent) {
++      if (aEvent.detail != 1 || aEvent.button != 0 ||
++          (this._startX != aEvent.clientX &&
++           this._startY != aEvent.clientY)) {
++        return;
++      }
++
++      aCallback(this, aEvent);
++    }, false);
++  },
++
+   /**
+    * Destroy the HUD object. Call this method to avoid memory leaks when the Web
+    * Console is closed.
+    */
+   destroy: function HUD_destroy()
+   {
++    this.sendMessageToContent("WebConsole:Destroy", {hudId: this.hudId});
++
++    this._messageListeners.forEach(function(aName) {
++      this.messageManager.removeMessageListener(aName, this);
++    }, this);
++
+     if (this.jsterm) {
+       this.jsterm.destroy();
+     }
+     if (this.gcliterm) {
+       this.gcliterm.destroy();
+     }
  
++    delete this.asyncRequests;
++    delete this.messageManager;
++    delete this.browser;
++
+     this.positionMenuitems.above.removeEventListener("command",
+       this._positionConsoleAbove, false);
+     this.positionMenuitems.below.removeEventListener("command",
+       this._positionConsoleBelow, false);
+     this.positionMenuitems.window.removeEventListener("command",
+       this._positionConsoleWindow, false);
  
- //////////////////////////////////////////////////////////////////////////////
- // ConsoleAPIObserver
- //////////////////////////////////////////////////////////////////////////////
+     this.closeButton.removeEventListener("command",
+@@ -4221,44 +4271,28 @@ HeadsUpDisplay.prototype = {
  
  let ConsoleAPIObserver = {
  
@@ -1253,7 +1548,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * @param aFactoryType "xul" or "text"
   * @param ignored This parameter is currently ignored, and will be removed
   * See bug 594304
-@@ -4758,17 +4750,17 @@ function JSTermHelper(aJSTerm)
+@@ -4758,17 +4792,17 @@ function JSTermHelper(aJSTerm)
     * @param object aObject
     *        Object to print to the output.
     * @returns void
@@ -1272,7 +1567,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }
  
      let output = [];
-@@ -5004,18 +4996,18 @@ JSTerm.prototype = {
+@@ -5004,18 +5038,18 @@ JSTerm.prototype = {
      //    result will be inspected by this panel.
      let buttons = [];
  
@@ -1293,7 +1588,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
                // TODO: This updates the value of the tree.
                // However, the states of opened nodes is not saved.
                // See bug 586246.
-@@ -5027,18 +5019,18 @@ JSTerm.prototype = {
+@@ -5027,29 +5061,80 @@ JSTerm.prototype = {
            }
          }
        });
@@ -1314,8 +1609,96 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      panel.openPopup(aAnchor, "after_pointer", 0, 0, false, false);
      panel.sizeTo(350, 450);
      return propPanel;
-@@ -5253,17 +5245,17 @@ JSTerm.prototype = {
-         hud.outputNode.removeChild(node.firstChild);
+   },
+ 
+   /**
++   * Opens a new PropertyPanelAsync. The panel has two buttons: "Update" reexecutes
++   * the passed aEvalString and places the result inside of the tree. The other
++   * button closes the panel.
++   *
++   * @param object aResponse
++   *        The response object to display/inspect inside of the tree.
++   * @param nsIDOMNode aAnchor
++   *        A node to popup the panel next to (using "after_pointer").
++   * @returns object the created and opened propertyPanel.
++   */
++  // TODO: update the comments
++  openPropertyPanelAsync: function JST_openPropertyPanelAsync(aOptions)
++  {
++    // The property panel has one button:
++    //    `Update`: reexecutes the string executed on the command line. The
++    //    result will be inspected by this panel.
++    let buttons = [];
++
++    // If there is a evalString passed to this function, then add a `Update`
++    // button to the panel so that the evalString can be reexecuted to update
++    // the content of the panel.
++    if (aOptions.updateButtonCallback) {
++      buttons.push({
++        label: l10n.getStr("update.button"),
++        accesskey: l10n.getStr("update.accesskey"),
++        oncommand: aOptions.updateButtonCallback,
++      });
++    }
++
++    let parent = this.document.getElementById("mainPopupSet");
++    let title = aOptions.title ?
++                l10n.getFormatStr("jsPropertyInspectTitle", [aOptions.title]) :
++                l10n.getStr("jsPropertyTitle");
++
++    let propPanel = new PropertyPanelAsync(parent, title, aOptions.data, buttons);
++
++    propPanel.panel.openPopup(aOptions.anchor, "after_pointer", 0, 0, false, false);
++    propPanel.panel.sizeTo(350, 450);
++
++    if (aOptions.anchor) {
++      propPanel.panel.addEventListener("popuphiding", function onPopupHide() {
++        propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
++        aOptions.anchor._panelOpen = false;
++      }, false);
++      aOptions.anchor._panelOpen = true;
++    }
++
++    return propPanel;
++  },
++
++  /**
+    * Writes a JS object to the JSTerm outputNode. If the user clicks on the
+    * written object, openPropertyPanel is called to open up a panel to inspect
+    * the object.
+    *
+    * @param string aEvalString
+    *        String that was evaluated to get the aOutputObject.
+    * @param object aResultObject
+    *        The evaluation result object.
+@@ -5238,32 +5323,37 @@ JSTerm.prototype = {
+    *        True if you want to clear the console messages storage associated to
+    *        this Web Console.
+    */
+   clearOutput: function JST_clearOutput(aClearStorage)
+   {
+     let hud = HUDService.getHudReferenceById(this.hudId);
+     hud.cssNodes = {};
+ 
+-    let node = hud.outputNode;
+-    while (node.firstChild) {
+-      if (node.firstChild.classList &&
+-          node.firstChild.classList.contains("webconsole-msg-inspector")) {
+-        hud.pruneConsoleDirNode(node.firstChild);
++    let outputNode = hud.outputNode;
++    let node;
++    while (node = outputNode.firstChild) {
++      if (node._evalCacheId && !node._panelOpen) {
++        this.clearObjectCache(node._evalCacheId);
++      }
++
++      if (node.classList &&
++          node.classList.contains("webconsole-msg-inspector")) {
++        hud.pruneConsoleDirNode(node);
+       }
+       else {
+-        hud.outputNode.removeChild(node.firstChild);
++        outputNode.removeChild(node);
        }
      }
  
@@ -1333,7 +1716,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Updates the size of the input field (command line) to fit its contents.
     *
     * @returns void
-@@ -5393,17 +5385,17 @@ JSTerm.prototype = {
+@@ -5393,17 +5483,17 @@ JSTerm.prototype = {
        case Ci.nsIDOMKeyEvent.DOM_VK_TAB:
          // Generate a completion and accept the first proposed value.
          if (this.complete(this.COMPLETE_HINT_ONLY) &&
@@ -1352,7 +1735,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          break;
      }
    },
-@@ -5658,16 +5650,22 @@ JSTerm.prototype = {
+@@ -5658,16 +5748,37 @@ JSTerm.prototype = {
     */
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
@@ -1361,10 +1744,25 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.completeNode.value = prefix + aSuffix;
    },
  
++  // TODO: add comment.
 +  clearObjectCache: function JST_clearObjectCache(aCacheId)
 +  {
 +    let hud = HUDService.getHudReferenceById(this.hudId);
 +    hud.sendMessageToContent("JSTerm:ClearObjectCache", {cacheId: aCacheId});
++  },
++
++  // TODO: add comment.
++  remoteObjectProvider:
++  function JST_remoteObjectProvider(aCacheId, aObjectId, aResultCacheId,
++                                    aCallback) {
++    let message = {
++      cacheId: aCacheId,
++      objectId: aObjectId,
++      resultCacheId: aResultCacheId,
++    };
++
++    let hud = HUDService.getHudReferenceById(this.hudId);
++    hud.sendMessageToContent("JSTerm:GetEvalObject", message, aCallback);
 +  },
 +
    /**
@@ -1375,7 +1773,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.inputNode.removeEventListener("keypress", this._keyPress, false);
      this.inputNode.removeEventListener("input", this._inputEventHandler, false);
      this.inputNode.removeEventListener("keyup", this._inputEventHandler, false);
-@@ -5800,42 +5798,16 @@ ConsoleUtils = {
+@@ -5800,42 +5911,16 @@ ConsoleUtils = {
    {
      let str = Cc["@mozilla.org/supports-string;1"].
        createInstance(Ci.nsISupportsString);
@@ -1418,7 +1816,30 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @returns void
     */
    scrollToVisible: function ConsoleUtils_scrollToVisible(aNode) {
-@@ -5946,18 +5918,18 @@ ConsoleUtils = {
+@@ -5924,18 +6009,20 @@ ConsoleUtils = {
+     // Store the body text, since it is needed later for the property tree
+     // case.
+     let body = aBody;
+     // If a string was supplied for the body, turn it into a DOM node and an
+     // associated clipboard string now.
+     aClipboardText = aClipboardText ||
+                      (aBody + (aSourceURL ? " @ " + aSourceURL : "") +
+                               (aSourceLine ? ":" + aSourceLine : ""));
+-    aBody = aBody instanceof Ci.nsIDOMNode && !(aLevel == "dir") ?
+-            aBody : aDocument.createTextNode(aBody);
++    if (!(aBody instanceof Ci.nsIDOMNode)) {
++      aBody = aDocument.createTextNode(aLevel == "dir" ?
++                                       aBody.resultString : aBody);
++    }
+ 
+     if (!aBody.nodeType) {
+       aBody = aDocument.createTextNode(aBody.toString());
+     }
+     if (typeof aBody == "string") {
+       aBody = aDocument.createTextNode(aBody);
+     }
+ 
+@@ -5946,18 +6033,18 @@ ConsoleUtils = {
      let repeatNode = aDocument.createElementNS(XUL_NS, "label");
      repeatNode.setAttribute("value", "1");
      repeatNode.classList.add("webconsole-msg-repeat");
@@ -1439,7 +1860,35 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      if (aSourceURL) {
        locationNode = this.createLocationNode(aDocument, aSourceURL,
                                               aSourceLine);
-@@ -6073,17 +6045,17 @@ ConsoleUtils = {
+@@ -5997,18 +6084,25 @@ ConsoleUtils = {
+       tree.appendChild(treecols);
+ 
+       tree.appendChild(aDocument.createElement("treechildren"));
+ 
+       bodyContainer.appendChild(tree);
+       node.appendChild(bodyContainer);
+       node.classList.add("webconsole-msg-inspector");
+       // Create the treeView object.
+-      let treeView = node.propertyTreeView = new PropertyTreeView();
+-      treeView.data = body;
++      let treeView = node.propertyTreeView = new PropertyTreeViewAsync();
++
++      treeView.data = {
++        rootCacheId: body.cacheId,
++        panelCacheId: body.cacheId,
++        remoteObject: body.remoteObject,
++        remoteObjectProvider: body.remoteObjectProvider,
++      };
++
+       tree.setAttribute("rows", treeView.rowCount);
+     }
+     else {
+       node.appendChild(bodyNode);
+     }
+     node.appendChild(repeatContainer);
+     if (locationNode) {
+       node.appendChild(locationNode);
+@@ -6073,17 +6167,17 @@ ConsoleUtils = {
     */
    createLocationNode:
    function ConsoleUtils_createLocationNode(aDocument, aSourceURL,
@@ -1458,7 +1907,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      // Style appropriately.
      locationNode.setAttribute("crop", "center");
      locationNode.setAttribute("title", aSourceURL);
-@@ -6293,46 +6265,16 @@ ConsoleUtils = {
+@@ -6293,46 +6387,16 @@ ConsoleUtils = {
    {
      let lastNodeHeight = aOutputNode.lastChild ?
                           aOutputNode.lastChild.clientHeight : 0;
@@ -1505,7 +1954,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  HeadsUpDisplayUICommands = {
    toggleHUD: function UIC_toggleHUD() {
-@@ -7061,22 +7003,22 @@ GcliTerm.prototype = {
+@@ -7061,22 +7125,22 @@ GcliTerm.prototype = {
        '    <image class="webconsole-msg-icon"/>' +
        '    <spacer flex="1"/>' +
        '  </vbox>' +
@@ -1533,13 +1982,16 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
 --- a/browser/devtools/webconsole/Makefile.in
 +++ b/browser/devtools/webconsole/Makefile.in
-@@ -43,16 +43,17 @@ srcdir		= @srcdir@
+@@ -41,18 +41,20 @@ DEPTH		= ../../..
+ topsrcdir	= @top_srcdir@
+ srcdir		= @srcdir@
  VPATH		= @srcdir@
  
  include $(DEPTH)/config/autoconf.mk
  
  EXTRA_JS_MODULES = \
  		PropertyPanel.jsm \
++		PropertyPanelAsync.jsm \
  		NetworkHelper.jsm \
  		AutocompletePopup.jsm \
 +		WebConsoleUtils.jsm \
@@ -1551,6 +2003,455 @@ diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconso
  EXTRA_PP_JS_MODULES = \
  		HUDService.jsm \
  		$(NULL)
+diff --git a/browser/devtools/webconsole/PropertyPanelAsync.jsm b/browser/devtools/webconsole/PropertyPanelAsync.jsm
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/PropertyPanelAsync.jsm
+@@ -0,0 +1,444 @@
++/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* ***** BEGIN LICENSE BLOCK *****
++ * Version: MPL 1.1/GPL 2.0/LGPL 2.1
++ *
++ * The contents of this file are subject to the Mozilla Public License Version
++ * 1.1 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * http://www.mozilla.org/MPL/
++ *
++ * Software distributed under the License is distributed on an "AS IS" basis,
++ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
++ * for the specific language governing rights and limitations under the
++ * License.
++ *
++ * The Original Code is DevTools Web Console Property Panel.
++ *
++ * The Initial Developer of the Original Code is
++ * the Mozilla Foundation.
++ * Portions created by the Initial Developer are Copyright (C) 2010
++ * the Initial Developer. All Rights Reserved.
++ *
++ * Contributor(s):
++ *   Rob Campbell <rcampbell@mozilla.com>
++ *   Julian Viereck <jviereck@mozilla.com>
++ *   Mihai Sucan <mihai.sucan@gmail.com>
++ *
++ * Alternatively, the contents of this file may be used under the terms of
++ * either the GNU General Public License Version 2 or later (the "GPL"), or
++ * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
++ * in which case the provisions of the GPL or the LGPL are applicable instead
++ * of those above. If you wish to allow use of your version of this file only
++ * under the terms of either the GPL or the LGPL, and not to allow others to
++ * use your version of this file under the terms of the MPL, indicate your
++ * decision by deleting the provisions above and replace them with the notice
++ * and other provisions required by the GPL or the LGPL. If you do not delete
++ * the provisions above, a recipient may use your version of this file under
++ * the terms of any one of the MPL, the GPL or the LGPL.
++ *
++ * ***** END LICENSE BLOCK ***** */
++
++const Cc = Components.classes;
++const Ci = Components.interfaces;
++const Cu = Components.utils;
++
++Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++Cu.import("resource://gre/modules/Services.jsm");
++
++XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function () {
++  let obj = {};
++  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
++  return obj.WebConsoleUtils;
++});
++
++var EXPORTED_SYMBOLS = ["PropertyPanel", "PropertyTreeView"];
++
++
++///////////////////////////////////////////////////////////////////////////
++//// PropertyTreeView.
++
++/**
++ * This is an implementation of the nsITreeView interface. For comments on the
++ * interface properties, see the documentation:
++ * https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsITreeView
++ */
++var PropertyTreeView = function() {
++  this._rows = [];
++};
++
++PropertyTreeView.prototype = {
++  /**
++   * Stores the visible rows of the tree.
++   */
++  _rows: null,
++
++  /**
++   * Stores the nsITreeBoxObject for this tree.
++   */
++  _treeBox: null,
++
++  /**
++   * Use this setter to update the content of the tree.
++   *
++   * @param object aObject
++   *        The new object to be displayed in the tree.
++   * @returns void
++   */
++  set data(aData) {
++    let oldLen = this._rows.length;
++
++    this._cleanup();
++
++    if (!aData) {
++      return;
++    }
++
++    if (aData.remoteObject) {
++      this._rootCacheId = aData.rootCacheId;
++      this._panelCacheId = aData.panelCacheId;
++      this._remoteObjectProvider = aData.remoteObjectProvider;
++      this._rows = [].concat(aData.remoteObject);
++      this._updateRemoteObject(this._rows, 0);
++    }
++    else if (aData.object) {
++      this._rows = this._inspectObject(aData.object, 0);
++    }
++    else {
++      throw new Error("First argument must have a .remoteObject or " +
++                      "an .object property!");
++    }
++
++    if (this._treeBox) {
++      this._treeBox.beginUpdateBatch();
++      if (oldLen) {
++        this._treeBox.rowCountChanged(0, -oldLen);
++      }
++      this._treeBox.rowCountChanged(0, this._rows.length);
++      this._treeBox.endUpdateBatch();
++    }
++  },
++
++  /**
++   * Generates the child items for the treeView of a given aItem. If there is
++   * already a children property on the aItem, this cached one is returned.
++   *
++   * @param object aItem
++   *        An item of the tree's elements to generate the children for.
++   * @param boolean aRootElement
++   *        If set, aItem is handled as an JS object and not as an item
++   *        element of the tree.
++   * @returns array of objects
++   *        Child items of aItem.
++   */
++  // TODO: update comment
++  _updateRemoteObject: function PTV__updateRemoteObject(aObject, aLevel)
++  {
++    aObject.forEach(function(aElement) {
++      aElement.level = aLevel;
++      aElement.isOpened = false;
++      aElement.children = null;
++    });
++  },
++
++  _inspectObject: function PTV__inspectObject(aObject, aLevel)
++  {
++    this._objectCache = {};
++    this._remoteObjectProvider = this._localObjectProvider.bind(this);
++    let children = WebConsoleUtils.namesAndValuesOf(aObject, this._objectCache);
++    this._updateRemoteObject(children, aLevel);
++    return children;
++  },
++
++  _localObjectProvider:
++  function PTV__localObjectProvider(aFromCacheId, aObjectId, aDestCacheId,
++                                    aCallback)
++  {
++    let object = WebConsoleUtils.namesAndValuesOf(this._objectCache[aObjectId],
++                                                  this._objectCache);
++    aCallback({cacheId: aFromCacheId,
++               objectId: aObjectId,
++               object: object,
++               childrenCacheId: aDestCacheId || aFromCacheId,
++    });
++  },
++
++  /** nsITreeView interface implementation **/
++
++  selection: null,
++
++  get rowCount()                     { return this._rows.length; },
++  setTree: function(treeBox)         { this._treeBox = treeBox;  },
++  getCellText: function(idx, column) {
++    let row = this._rows[idx];
++    return row.name + ": " + row.value;
++  },
++  getLevel: function(idx) {
++    return this._rows[idx].level;
++  },
++  isContainer: function(idx) {
++    return !!this._rows[idx].inspectable;
++  },
++  isContainerOpen: function(idx) {
++    return this._rows[idx].isOpened;
++  },
++  isContainerEmpty: function(idx)    { return false; },
++  isSeparator: function(idx)         { return false; },
++  isSorted: function()               { return false; },
++  isEditable: function(idx, column)  { return false; },
++  isSelectable: function(row, col)   { return true; },
++
++  getParentIndex: function(idx)
++  {
++    if (this.getLevel(idx) == 0) {
++      return -1;
++    }
++    for (var t = idx - 1; t >= 0; t--) {
++      if (this.isContainer(t)) {
++        return t;
++      }
++    }
++    return -1;
++  },
++
++  hasNextSibling: function(idx, after)
++  {
++    var thisLevel = this.getLevel(idx);
++    return this._rows.slice(after + 1).some(function (r) r.level == thisLevel);
++  },
++
++  toggleOpenState: function(idx)
++  {
++    let item = this._rows[idx];
++    if (!item.inspectable) {
++      return;
++    }
++
++    if (item.isOpened) {
++      this._treeBox.beginUpdateBatch();
++      item.isOpened = false;
++
++      var thisLevel = item.level;
++      var t = idx + 1, deleteCount = 0;
++      while (t < this._rows.length && this.getLevel(t++) > thisLevel) {
++        deleteCount++;
++      }
++
++      if (deleteCount) {
++        this._rows.splice(idx + 1, deleteCount);
++        this._treeBox.rowCountChanged(idx + 1, -deleteCount);
++      }
++      this._treeBox.invalidateRow(idx);
++      this._treeBox.endUpdateBatch();
++    }
++    else {
++      let levelUpdate = true;
++      let callback = function _onRemoteResponse(aResponse) {
++        this._treeBox.beginUpdateBatch();
++        item.isOpened = true;
++
++        if (levelUpdate) {
++          this._updateRemoteObject(aResponse.object, item.level + 1);
++          item.children = aResponse.object;
++        }
++
++        this._rows.splice.apply(this._rows, [idx + 1, 0].concat(item.children));
++
++        this._treeBox.rowCountChanged(idx + 1, item.children.length);
++        this._treeBox.invalidateRow(idx);
++        this._treeBox.endUpdateBatch();
++      }.bind(this);
++
++      if (!item.children) {
++        let fromCacheId = item.level > 0 ? this._panelCacheId :
++                                           this._rootCacheId;
++        this._remoteObjectProvider(fromCacheId, item.objectId,
++                                   this._panelCacheId, callback);
++      }
++      else {
++        levelUpdate = false;
++        callback({object: item.children});
++      }
++    }
++  },
++
++  getImageSrc: function(idx, column) { },
++  getProgressMode : function(idx,column) { },
++  getCellValue: function(idx, column) { },
++  cycleHeader: function(col, elem) { },
++  selectionChanged: function() { },
++  cycleCell: function(idx, column) { },
++  performAction: function(action) { },
++  performActionOnCell: function(action, index, column) { },
++  performActionOnRow: function(action, row) { },
++  getRowProperties: function(idx, column, prop) { },
++  getCellProperties: function(idx, column, prop) { },
++  getColumnProperties: function(column, element, prop) { },
++
++  setCellValue: function(row, col, value)               { },
++  setCellText: function(row, col, value)                { },
++  drop: function(index, orientation, dataTransfer)      { },
++  canDrop: function(index, orientation, dataTransfer)   { return false; },
++
++  _cleanup: function PTV__cleanup()
++  {
++    if (this._rows.length) {
++      // Reset the existing _rows children to the initial state.
++      this._updateRemoteObject(this._rows, 0);
++      this._rows = [];
++    }
++
++    delete this._objectCache;
++    delete this._rootCacheId;
++    delete this._panelCacheId;
++    delete this._remoteObjectProvider;
++  },
++};
++
++///////////////////////////////////////////////////////////////////////////
++//// Helper for creating the panel.
++
++/**
++ * Creates a DOMNode and sets all the attributes of aAttributes on the created
++ * element.
++ *
++ * @param nsIDOMDocument aDocument
++ *        Document to create the new DOMNode.
++ * @param string aTag
++ *        Name of the tag for the DOMNode.
++ * @param object aAttributes
++ *        Attributes set on the created DOMNode.
++ * @returns nsIDOMNode
++ */
++function createElement(aDocument, aTag, aAttributes)
++{
++  let node = aDocument.createElement(aTag);
++  for (var attr in aAttributes) {
++    node.setAttribute(attr, aAttributes[attr]);
++  }
++  return node;
++}
++
++/**
++ * Creates a new DOMNode and appends it to aParent.
++ *
++ * @param nsIDOMDocument aDocument
++ *        Document to create the new DOMNode.
++ * @param nsIDOMNode aParent
++ *        A parent node to append the created element.
++ * @param string aTag
++ *        Name of the tag for the DOMNode.
++ * @param object aAttributes
++ *        Attributes set on the created DOMNode.
++ * @returns nsIDOMNode
++ */
++function appendChild(aDocument, aParent, aTag, aAttributes)
++{
++  let node = createElement(aDocument, aTag, aAttributes);
++  aParent.appendChild(node);
++  return node;
++}
++
++///////////////////////////////////////////////////////////////////////////
++//// PropertyPanel
++
++/**
++ * Creates a new PropertyPanel.
++ *
++ * @param nsIDOMNode aParent
++ *        Parent node to append the created panel to.
++ * @param string aTitle
++ *        Title for the panel.
++ * @param string aObject
++ *        Object to display in the tree.
++ * @param array of objects aButtons
++ *        Array with buttons to display at the bottom of the panel.
++ */
++// TODO: update the comment
++function PropertyPanel(aParent, aTitle, aObject, aButtons)
++{
++  let document = aParent.ownerDocument;
++
++  // Create the underlying panel
++  this.panel = createElement(document, "panel", {
++    label: aTitle,
++    titlebar: "normal",
++    noautofocus: "true",
++    noautohide: "true",
++    close: "true",
++  });
++
++  // Create the tree.
++  let tree = this.tree = createElement(document, "tree", {
++    flex: 1,
++    hidecolumnpicker: "true"
++  });
++
++  let treecols = document.createElement("treecols");
++  appendChild(document, treecols, "treecol", {
++    primary: "true",
++    flex: 1,
++    hideheader: "true",
++    ignoreincolumnpicker: "true"
++  });
++  tree.appendChild(treecols);
++
++  tree.appendChild(document.createElement("treechildren"));
++  this.panel.appendChild(tree);
++
++  // Create the footer.
++  let footer = createElement(document, "hbox", { align: "end" });
++  appendChild(document, footer, "spacer", { flex: 1 });
++
++  // The footer can have butttons.
++  let self = this;
++  if (aButtons) {
++    aButtons.forEach(function(button) {
++      let buttonNode = appendChild(document, footer, "button", {
++        label: button.label,
++        accesskey: button.accesskey || "",
++        class: button.class || "",
++      });
++      buttonNode.addEventListener("command", button.oncommand, false);
++    });
++  }
++
++  appendChild(document, footer, "resizer", { dir: "bottomend" });
++  this.panel.appendChild(footer);
++
++  aParent.appendChild(this.panel);
++
++  // Create the treeView object.
++  this.treeView = new PropertyTreeView();
++  this.treeView.data = aObject;
++
++  // Set the treeView object on the tree view. This has to be done *after* the
++  // panel is shown. This is because the tree binding must be attached first.
++  this.panel.addEventListener("popupshown", function onPopupShow()
++  {
++    self.panel.removeEventListener("popupshown", onPopupShow, false);
++    self.tree.view = self.treeView;
++  }, false);
++
++  this.panel.addEventListener("popuphidden", function onPopupHide()
++  {
++    self.panel.removeEventListener("popuphidden", onPopupHide, false);
++    self.destroy();
++  }, false);
++}
++
++/**
++ * Destroy the PropertyPanel. This closes the poped up panel and removes
++ * it from the browser DOM.
++ *
++ * @returns void
++ */
++PropertyPanel.prototype.destroy = function PP_destroy()
++{
++  this.treeView.data = null;
++  this.panel.parentNode.removeChild(this.panel);
++  this.treeView = null;
++  this.panel = null;
++  this.tree = null;
++}
++
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
 new file mode 100644
 --- /dev/null
