@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent c0946061c57f8b46123880df73afd7e82602f473
+# Parent 6fe5b0271cd125c7a7fca5b75bc04943c6b31d08
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1334002836 -10800
+# Date 1334089208 -10800
 
 Bug 673148 - (async-webconsole) Part 1 - Make console API async
 
@@ -23,7 +23,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -0,0 +1,562 @@
+@@ -0,0 +1,577 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -136,9 +136,14 @@ new file mode 100644
 +    if (!aMessage.json || (aMessage.name != "WebConsole:Init" &&
 +                           aMessage.json.hudId != this.hudId)) {
 +      Cu.reportError("Web Console content script: received message " +
-+                     aMessage.name + " from wrong hudId.");
++                     aMessage.name + " from wrong hudId!");
++      if (aMessage.json) {
++        dump("Manager_receiveMessage " + this.hudId + " " + aMessage.json.hudId + " " + aMessage.name + "\n");
++      }
 +      return;
 +    }
++
++    //dump("Manager_receiveMessage " + this.hudId + " " + aMessage.name + "\n");
 +
 +    switch (aMessage.name) {
 +      case "WebConsole:Init":
@@ -212,6 +217,7 @@ new file mode 100644
 +   */
 +  addMessageHandler: function Manager_addMessageHandler(aName, aCallback)
 +  {
++    //dump("Manager_addMessageHandler " + aName + "\n");
 +    if (aName in this._messageHandlers) {
 +      return;
 +    }
@@ -228,12 +234,25 @@ new file mode 100644
 +   */
 +  removeMessageHandler: function Manager_removeMessageHandler(aName)
 +  {
++    //dump("Manager_removeMessageHandler " + aName + "\n");
 +    if (!(aName in this._messageHandlers)) {
 +      return;
 +    }
 +
 +    delete this._messageHandlers[aName];
 +    removeMessageListener(aName, this);
++  },
++
++  sendMessage: function Manager_sendMessage(aName, aMessage)
++  {
++    //dump("Manager_sendMessage " + this.hudId + " " + aName + "\n");
++
++    aMessage.hudId = this.hudId;
++    if (!("id" in aMessage)) {
++      aMessage.id = this.sequenceId;
++    }
++
++    sendAsyncMessage(aName, aMessage);
 +  },
 +
 +  /**
@@ -255,6 +274,7 @@ new file mode 100644
 +   */
 +  enableFeature: function Manager_enableFeature(aFeature, aMessage)
 +  {
++    //dump("Manager_enableFeature " + aFeature + "\n");
 +    if (this._enabledFeatures.indexOf(aFeature) != -1) {
 +      return;
 +    }
@@ -272,6 +292,7 @@ new file mode 100644
 +    }
 +
 +    this._enabledFeatures.push(aFeature);
++    //dump("Manager_enableFeature " + aFeature + " end\n");
 +  },
 +
 +  /**
@@ -283,6 +304,7 @@ new file mode 100644
 +   */
 +  disableFeature: function Manager_disableFeature(aFeature)
 +  {
++    //dump("Manager_disableFeature " + aFeature + "\n");
 +    let index = this._enabledFeatures.indexOf(aFeature);
 +    if (index == -1) {
 +      return;
@@ -300,6 +322,7 @@ new file mode 100644
 +        Cu.reportError("Web Console content: unknown feature " + aFeature);
 +        break;
 +    }
++    //dump("Manager_disableFeature " + aFeature + " end\n");
 +  },
 +
 +  /**
@@ -322,13 +345,7 @@ new file mode 100644
 +
 +    messages.sort(function(a, b) { return a.timeStamp - b.timeStamp; });
 +
-+    let messageToChrome = {
-+      hudId: Manager.hudId,
-+      id: Manager.sequenceId,
-+      messages: messages,
-+    };
-+
-+    sendAsyncMessage("WebConsole:CachedMessages", messageToChrome);
++    Manager.sendMessage("WebConsole:CachedMessages", {messages: messages});
 +  },
 +
 +  /**
@@ -340,7 +357,7 @@ new file mode 100644
 +      removeMessageListener(aName, this);
 +    }, this);
 +
-+    this._enabledFeatures.forEach(this.disableFeature, this);
++    this._enabledFeatures.slice().forEach(this.disableFeature, this);
 +
 +    this.hudId = null;
 +    this._messageHandlers = null;
@@ -396,14 +413,13 @@ new file mode 100644
 +      let object = this._objectCache[aRequest.cacheId][aRequest.objectId];
 +      let resultCacheId = aRequest.resultCacheId || aRequest.cacheId;
 +      let message = {
-+        hudId: Manager.hudId,
 +        id: aRequest.id,
 +        cacheId: aRequest.cacheId,
 +        objectId: aRequest.objectId,
 +        object: this.prepareObjectForRemote(object, resultCacheId),
 +        childrenCacheId: resultCacheId,
 +      };
-+      sendAsyncMessage("JSTerm:EvalObject", message);
++      Manager.sendMessage("JSTerm:EvalObject", message);
 +    }
 +    else {
 +      Cu.reportError("JSTerm:GetEvalObject request " + aRequest.id +
@@ -489,13 +505,9 @@ new file mode 100644
 +      return;
 +    }
 +
-+    let messageToChrome = {
-+      hudId: Manager.hudId,
-+      id: Manager.sequenceId,
-+    };
-+    this._prepareApiMessageForRemote(aMessage, messageToChrome);
-+
-+    sendAsyncMessage("WebConsole:ConsoleAPI", messageToChrome);
++    let messageToChrome = {};
++    this._prepareApiMessageForRemote(apiMessage, messageToChrome);
++    Manager.sendMessage("WebConsole:ConsoleAPI", messageToChrome);
 +  },
 +
 +  _prepareApiMessageForRemote:
@@ -559,15 +571,18 @@ new file mode 100644
 +  {
 +    let innerWindowId = WebConsoleUtils.getInnerWindowId(Manager.window);
 +    let messages = gConsoleStorage.getEvents(innerWindowId);
-+    return messages.map(function(aMessage) {
-+        let remoteMessage = {
-+          hudId: Manager.hudId,
-+          id: Manager.sequenceId,
-+          type: "ConsoleAPI",
-+        };
-+        this._prepareApiMessageForRemote(aMessage, remoteMessage);
-+        return remoteMessage;
-+      }, this);
++
++    let result = messages.map(function(aMessage) {
++      let remoteMessage = {
++        hudId: Manager.hudId,
++        id: Manager.sequenceId,
++        type: "ConsoleAPI",
++      };
++      this._prepareApiMessageForRemote(aMessage.wrappedJSObject, remoteMessage);
++      return remoteMessage;
++    }, this);
++
++    return result;
 +  },
 +
 +  handleClearCache: function CAO_handleClearCache()
@@ -875,7 +890,46 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Tell the HUDService that a HeadsUpDisplay can be activated
     * for the window or context that has 'aContextDOMId' node id
-@@ -1998,17 +1962,17 @@ HUD_SERVICE.prototype =
+@@ -1814,19 +1778,16 @@ HUD_SERVICE.prototype =
+ 
+   /**
+    * Register a reference of each HeadsUpDisplay that is created
+    */
+   registerHUDReference:
+   function HS_registerHUDReference(aHUD)
+   {
+     this.hudReferences[aHUD.hudId] = aHUD;
+-
+-    let id = ConsoleUtils.supString(aHUD.hudId);
+-    Services.obs.notifyObservers(id, "web-console-created", null);
+   },
+ 
+   /**
+    * Register a new Heads Up Display
+    *
+    * @returns void
+    */
+   registerDisplay: function HS_registerDisplay(aHUDId)
+@@ -1905,17 +1866,17 @@ HUD_SERVICE.prototype =
+     this.unregisterActiveContext(aHUDId);
+ 
+     let popupset = hud.chromeDocument.getElementById("mainPopupSet");
+     let panels = popupset.querySelectorAll("panel[hudId=" + aHUDId + "]");
+     for (let i = 0; i < panels.length; i++) {
+       panels[i].hidePopup();
+     }
+ 
+-    let id = ConsoleUtils.supString(aHUDId);
++    let id = WebConsoleUtils.supportsString(aHUDId);
+     Services.obs.notifyObservers(id, "web-console-destroyed", null);
+ 
+     if (Object.keys(this.hudReferences).length == 0) {
+       let autocompletePopup = hud.chromeDocument.
+                               getElementById("webConsole_autocompletePopup");
+       if (autocompletePopup) {
+         autocompletePopup.parentNode.removeChild(autocompletePopup);
+       }
+@@ -1998,17 +1959,17 @@ HUD_SERVICE.prototype =
     * Returns the hudId that is corresponding to the hud activated for the
     * passed aContentWindow. If there is no matching hudId null is returned.
     *
@@ -894,7 +948,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param string aId
     * @returns Object
-@@ -2049,188 +2013,16 @@ HUD_SERVICE.prototype =
+@@ -2049,188 +2010,16 @@ HUD_SERVICE.prototype =
     */
    updateFilterText: function HS_updateFiltertext(aTextBoxNode)
    {
@@ -1083,7 +1137,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @return void
     */
    logWarningAboutReplacedAPI:
-@@ -2285,17 +2077,17 @@ HUD_SERVICE.prototype =
+@@ -2285,17 +2074,17 @@ HUD_SERVICE.prototype =
      // Warnings and legacy strict errors become warnings; other types become
      // errors.
      let severity = SEVERITY_ERROR;
@@ -1102,7 +1156,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
          let node = ConsoleUtils.createMessageNode(chromeDocument,
                                                    category,
-@@ -2606,17 +2398,17 @@ HUD_SERVICE.prototype =
+@@ -2606,17 +2395,17 @@ HUD_SERVICE.prototype =
                                  timing.REQUEST_HEADER) / 1000);
  
                  // Add the request duration.
@@ -1121,7 +1175,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
                    [ httpActivity.method, httpActivity.url, fullStatusText ];
                  msgObject.messageNode.clipboardText =
                    clipboardTextPieces.join(" ");
-@@ -2954,25 +2746,23 @@ HUD_SERVICE.prototype =
+@@ -2954,25 +2743,23 @@ HUD_SERVICE.prototype =
        // get nBox object and call new HUD
        let config = { parentNode: nBox,
                       contentWindow: aContentWindow.top
@@ -1148,7 +1202,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          hud.reattachConsole(aContentWindow);
        }
      }
-@@ -3135,17 +2925,17 @@ HUD_SERVICE.prototype =
+@@ -3135,17 +2922,17 @@ HUD_SERVICE.prototype =
        // copied output.
        if (i > 0 && item.classList.contains("webconsole-new-group")) {
          newGroup = true;
@@ -1167,7 +1221,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        }
      }
      clipboardHelper.copyString(strings.join("\n"));
-@@ -3245,16 +3035,22 @@ function HeadsUpDisplay(aConfig)
+@@ -3245,16 +3032,22 @@ function HeadsUpDisplay(aConfig)
      this.parentNode = parentNode;
      this.notificationBox = parentNode;
    }
@@ -1190,7 +1244,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    // create the JSTerm input element
    try {
      this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
-@@ -3266,19 +3062,29 @@ function HeadsUpDisplay(aConfig)
+@@ -3266,19 +3059,30 @@ function HeadsUpDisplay(aConfig)
      }
    }
    catch (ex) {
@@ -1211,7 +1265,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +   * @private
 +   * @type array
 +   */
-+  _messageListeners: ["JSTerm:EvalObject", "WebConsole:ConsoleAPI"],
++  _messageListeners: ["JSTerm:EvalObject", "WebConsole:ConsoleAPI",
++                      "WebConsole:CachedMessages"],
  
    consolePanel: null,
  
@@ -1220,7 +1275,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    groupDepth: 0,
  
-@@ -3460,17 +3266,17 @@ HeadsUpDisplay.prototype = {
+@@ -3460,17 +3264,17 @@ HeadsUpDisplay.prototype = {
    /**
     * Retrieve the Web Console panel title.
     *
@@ -1239,7 +1294,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      window: null
    },
  
-@@ -3565,39 +3371,16 @@ HeadsUpDisplay.prototype = {
+@@ -3565,39 +3369,16 @@ HeadsUpDisplay.prototype = {
        this.jsterm.inputNode.focus();
      }
      if (this.gcliterm) {
@@ -1279,7 +1334,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * The GcliTerm object that contains the console's GCLI
     */
-@@ -3635,23 +3418,26 @@ HeadsUpDisplay.prototype = {
+@@ -3635,23 +3416,26 @@ HeadsUpDisplay.prototype = {
        throw new Error("Unsupported Gecko Application");
      }
    },
@@ -1313,7 +1368,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let filteredErrors = (errors.value || []).filter(function(aError) {
        return aError instanceof Ci.nsIScriptError &&
               aError.innerWindowID == innerWindowId;
-@@ -3667,17 +3453,17 @@ HeadsUpDisplay.prototype = {
+@@ -3667,17 +3451,17 @@ HeadsUpDisplay.prototype = {
      // Display all messages.
      messages.forEach(function(aMessage) {
        if (aMessage instanceof Ci.nsIScriptError) {
@@ -1332,7 +1387,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Scroll to bottom.
      let numChildren = this.outputNode.childNodes.length;
-@@ -3759,17 +3545,17 @@ HeadsUpDisplay.prototype = {
+@@ -3759,17 +3543,17 @@ HeadsUpDisplay.prototype = {
      consoleWrap.setAttribute("flex", "1");
  
      this.filterSpacer = this.makeXULNode("spacer");
@@ -1351,7 +1406,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      this.filterPrefs = HUDService.getDefaultFilterPrefs(this.hudId);
  
-@@ -3937,38 +3723,38 @@ HeadsUpDisplay.prototype = {
+@@ -3937,38 +3721,38 @@ HeadsUpDisplay.prototype = {
        this.positionConsole("below");
      }).bind(this);
      this._positionConsoleWindow = (function HUD_positionWindow() {
@@ -1395,7 +1450,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.positionMenuitems = {
        last: null,
        above: itemAbove,
-@@ -3991,38 +3777,38 @@ HeadsUpDisplay.prototype = {
+@@ -3991,38 +3775,38 @@ HeadsUpDisplay.prototype = {
      let id = this.hudId + "-output-contextmenu";
      menuPopup.setAttribute("id", id);
      menuPopup.addEventListener("popupshowing", function() {
@@ -1440,7 +1495,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      aConsoleWrapper.appendChild(menuPopup);
      aConsoleWrapper.setAttribute("context", id);
    },
-@@ -4043,30 +3829,30 @@ HeadsUpDisplay.prototype = {
+@@ -4043,30 +3827,30 @@ HeadsUpDisplay.prototype = {
      let toolbarButton = this.makeXULNode("toolbarbutton");
      aParent.appendChild(toolbarButton);
  
@@ -1474,7 +1529,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        menuItem.setAttribute("prefKey", prefKey);
  
        let checked = this.filterPrefs[prefKey];
-@@ -4123,17 +3909,17 @@ HeadsUpDisplay.prototype = {
+@@ -4123,17 +3907,17 @@ HeadsUpDisplay.prototype = {
          hud.jsterm.clearOutput(true);
        }
        if (hud.gcliterm) {
@@ -1493,7 +1548,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Destroy the property inspector message node. This performs the necessary
-@@ -4168,45 +3954,301 @@ HeadsUpDisplay.prototype = {
+@@ -4168,45 +3952,316 @@ HeadsUpDisplay.prototype = {
      }
      return this.HUDBox;
    },
@@ -1639,6 +1694,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    // Make the node bring up the property panel, to allow the user to inspect
 +    // the stack trace.
 +    if (level == "trace") {
++      node._stacktrace = args;
++
 +      this.makeOutputMessageLink(node, function _traceNodeClickCallback() {
 +        if (node._panelOpen) {
 +          return;
@@ -1646,7 +1703,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +        let options = {
 +          anchor: node,
-+          data: { object: args },
++          data: { object: node._stacktrace },
 +        };
 +
 +        let propPanel = this.jsterm.openPropertyPanelAsync(options);
@@ -1683,10 +1740,12 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      this.messageManager.addMessageListener(aName, this);
 +    }, this);
 +
-+    this.sendMessageToContent("WebConsole:Init",
-+                              {hudId: this.hudId,
-+                               features: ["ConsoleAPI", "JSTerm"],
-+                               cachedMessages: ["ConsoleAPI"]});
++    let message = {
++      hudId: this.hudId,
++      features: ["ConsoleAPI", "JSTerm"],
++      cachedMessages: ["ConsoleAPI"],
++    };
++    this.sendMessageToContent("WebConsole:Init", message);
 +  },
 +
 +  receiveMessage: function HUD_receiveMessage(aMessage)
@@ -1697,6 +1756,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      return;
 +    }
 +
++    //dump("HUD_receiveMessage " + this.hudId + " " + aMessage.name + "\n");
++
 +    switch (aMessage.name) {
 +      case "JSTerm:EvalObject":
 +        this.receiveMessageWithCallback(aMessage.json);
@@ -1706,8 +1767,15 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +        break;
 +      case "WebConsole:CachedMessages":
 +        this.displayCachedConsoleMessages(aMessage.json.messages);
++        this._onInitComplete();
 +        break;
 +    }
++  },
++
++  _onInitComplete: function HUD__onInitComplete()
++  {
++    let id = WebConsoleUtils.supportsString(this.hudId);
++    Services.obs.notifyObservers(id, "web-console-created", null);
 +  },
 +
 +  receiveMessageWithCallback: function HUD_receiveMessageWithCallback(aResponse)
@@ -1726,8 +1794,10 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +  sendMessageToContent:
 +  function HUD_sendMessageToContent(aName, aMessage, aCallback)
 +  {
++    //dump("HUD_sendMessageToContent " + this.hudId + " " + aName + "\n");
++
 +    aMessage.hudId = this.hudId;
-+    if (!aMessage.id) {
++    if (!("id" in aMessage)) {
 +      aMessage.id = "HUDChrome-" + HUDService.sequenceId();
 +    }
 +
@@ -1803,7 +1873,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        this._positionConsoleWindow, false);
  
      this.closeButton.removeEventListener("command",
-@@ -4221,44 +4263,28 @@ HeadsUpDisplay.prototype = {
+@@ -4221,44 +4276,28 @@ HeadsUpDisplay.prototype = {
  
  let ConsoleAPIObserver = {
  
@@ -1849,7 +1919,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * @param aFactoryType "xul" or "text"
   * @param ignored This parameter is currently ignored, and will be removed
   * See bug 594304
-@@ -4758,17 +4784,17 @@ function JSTermHelper(aJSTerm)
+@@ -4462,17 +4501,17 @@ function JSPropertyProvider(aScope, aInp
+       // If obj is undefined or null, then there is no chance to run completion
+       // on it. Exit here.
+       if (typeof obj === "undefined" || obj === null) {
+         return null;
+       }
+ 
+       // Check if prop is a getter function on obj. Functions can change other
+       // stuff so we can't execute them to get the next object. Stop here.
+-      if (isNonNativeGetter(obj, prop)) {
++      if (WebConsoleUtils.isNonNativeGetter(obj, prop)) {
+         return null;
+       }
+       try {
+         obj = obj[prop];
+       }
+       catch (ex) {
+         return null;
+       }
+@@ -4758,17 +4797,17 @@ function JSTermHelper(aJSTerm)
     * @param object aObject
     *        Object to print to the output.
     * @returns void
@@ -1868,7 +1957,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }
  
      let output = [];
-@@ -5004,18 +5030,18 @@ JSTerm.prototype = {
+@@ -5004,18 +5043,18 @@ JSTerm.prototype = {
      //    result will be inspected by this panel.
      let buttons = [];
  
@@ -1889,7 +1978,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
                // TODO: This updates the value of the tree.
                // However, the states of opened nodes is not saved.
                // See bug 586246.
-@@ -5027,29 +5053,80 @@ JSTerm.prototype = {
+@@ -5027,29 +5066,80 @@ JSTerm.prototype = {
            }
          }
        });
@@ -1972,7 +2061,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        String that was evaluated to get the aOutputObject.
     * @param object aResultObject
     *        The evaluation result object.
-@@ -5238,33 +5315,37 @@ JSTerm.prototype = {
+@@ -5238,33 +5328,37 @@ JSTerm.prototype = {
     *        True if you want to clear the console messages storage associated to
     *        this Web Console.
     */
@@ -2018,7 +2107,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @returns void
     */
-@@ -5393,17 +5474,17 @@ JSTerm.prototype = {
+@@ -5393,17 +5487,17 @@ JSTerm.prototype = {
        case Ci.nsIDOMKeyEvent.DOM_VK_TAB:
          // Generate a completion and accept the first proposed value.
          if (this.complete(this.COMPLETE_HINT_ONLY) &&
@@ -2037,7 +2126,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          break;
      }
    },
-@@ -5658,16 +5739,37 @@ JSTerm.prototype = {
+@@ -5658,16 +5752,37 @@ JSTerm.prototype = {
     */
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
@@ -2075,15 +2164,24 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.inputNode.removeEventListener("keypress", this._keyPress, false);
      this.inputNode.removeEventListener("input", this._inputEventHandler, false);
      this.inputNode.removeEventListener("keyup", this._inputEventHandler, false);
-@@ -5800,42 +5902,16 @@ ConsoleUtils = {
-   {
-     let str = Cc["@mozilla.org/supports-string;1"].
-       createInstance(Ci.nsISupportsString);
-     str.data = aString;
-     return str;
-   },
+@@ -5791,50 +5906,16 @@ FirefoxApplicationHooks.prototype = {
+  */
  
+ ConsoleUtils = {
    /**
+    * Flag to turn on and off scrolling.
+    */
+   scroll: true,
+ 
+-  supString: function ConsoleUtils_supString(aString)
+-  {
+-    let str = Cc["@mozilla.org/supports-string;1"].
+-      createInstance(Ci.nsISupportsString);
+-    str.data = aString;
+-    return str;
+-  },
+-
+-  /**
 -   * Generates a millisecond resolution timestamp.
 -   *
 -   * @returns integer
@@ -2109,7 +2207,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    return HUDService.getFormatStr("timestampFormat", parameters);
 -  },
 -
--  /**
+   /**
     * Scrolls a node so that it's visible in its containing XUL "scrollbox"
     * element.
     *
@@ -2117,8 +2215,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        The node to make visible.
     * @returns void
     */
-   scrollToVisible: function ConsoleUtils_scrollToVisible(aNode) {
-@@ -5924,18 +6000,20 @@ ConsoleUtils = {
+@@ -5924,18 +6005,20 @@ ConsoleUtils = {
      // Store the body text, since it is needed later for the property tree
      // case.
      let body = aBody;
@@ -2141,7 +2238,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        aBody = aDocument.createTextNode(aBody);
      }
  
-@@ -5946,18 +6024,18 @@ ConsoleUtils = {
+@@ -5946,18 +6029,18 @@ ConsoleUtils = {
      let repeatNode = aDocument.createElementNS(XUL_NS, "label");
      repeatNode.setAttribute("value", "1");
      repeatNode.classList.add("webconsole-msg-repeat");
@@ -2162,7 +2259,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      if (aSourceURL) {
        locationNode = this.createLocationNode(aDocument, aSourceURL,
                                               aSourceLine);
-@@ -5997,18 +6075,25 @@ ConsoleUtils = {
+@@ -5997,18 +6080,25 @@ ConsoleUtils = {
        tree.appendChild(treecols);
  
        tree.appendChild(aDocument.createElement("treechildren"));
@@ -2190,7 +2287,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      node.appendChild(repeatContainer);
      if (locationNode) {
        node.appendChild(locationNode);
-@@ -6073,17 +6158,17 @@ ConsoleUtils = {
+@@ -6073,17 +6163,17 @@ ConsoleUtils = {
     */
    createLocationNode:
    function ConsoleUtils_createLocationNode(aDocument, aSourceURL,
@@ -2209,7 +2306,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      // Style appropriately.
      locationNode.setAttribute("crop", "center");
      locationNode.setAttribute("title", aSourceURL);
-@@ -6293,46 +6378,16 @@ ConsoleUtils = {
+@@ -6270,17 +6360,17 @@ ConsoleUtils = {
+ 
+     // Scroll to the new node if it is not filtered, and if the output node is
+     // scrolled at the bottom or if the new node is a jsterm input/output
+     // message.
+     if (!isFiltered && !isRepeated && (scrolledToBottom || isInputOutput)) {
+       ConsoleUtils.scrollToVisible(aNode);
+     }
+ 
+-    let id = ConsoleUtils.supString(aHUDId);
++    let id = WebConsoleUtils.supportsString(aHUDId);
+     let nodeID = aNode.getAttribute("id");
+     Services.obs.notifyObservers(id, "web-console-message-created", nodeID);
+   },
+ 
+   /**
+    * Check if the given output node is scrolled to the bottom.
+    *
+    * @param nsIDOMNode aOutputNode
+@@ -6293,46 +6383,16 @@ ConsoleUtils = {
    {
      let lastNodeHeight = aOutputNode.lastChild ?
                           aOutputNode.lastChild.clientHeight : 0;
@@ -2256,7 +2372,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  HeadsUpDisplayUICommands = {
    toggleHUD: function UIC_toggleHUD() {
-@@ -7061,22 +7116,22 @@ GcliTerm.prototype = {
+@@ -7061,22 +7121,22 @@ GcliTerm.prototype = {
        '    <image class="webconsole-msg-icon"/>' +
        '    <spacer flex="1"/>' +
        '  </vbox>' +
@@ -2760,7 +2876,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -0,0 +1,732 @@
+@@ -0,0 +1,746 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -2847,6 +2963,20 @@ new file mode 100644
 +    catch (ex) {
 +      return aObject;
 +    }
++  },
++
++  /**
++   * Wrap a string in an nsISupportsString object.
++   *
++   * @param string aString
++   * @return nsISupportsString
++   */
++  supportsString: function WCU_supportsString(aString)
++  {
++    let str = Cc["@mozilla.org/supports-string;1"].
++              createInstance(Ci.nsISupportsString);
++    str.data = aString;
++    return str;
 +  },
 +
 +  /**
@@ -3493,6 +3623,73 @@ new file mode 100644
 +XPCOMUtils.defineLazyGetter(WebConsoleUtils.l10n, "stringBundle", function() {
 +  return Services.strings.createBundle(STRINGS_URI);
 +});
+diff --git a/browser/devtools/webconsole/test/browser_cached_messages.js b/browser/devtools/webconsole/test/browser_cached_messages.js
+--- a/browser/devtools/webconsole/test/browser_cached_messages.js
++++ b/browser/devtools/webconsole/test/browser_cached_messages.js
+@@ -39,45 +39,42 @@
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-webconsole-error-observer.html";
+ 
+ function test()
+ {
+   waitForExplicitFinish();
+ 
+   expectUncaughtException();
+ 
+-  gBrowser.selectedTab = gBrowser.addTab(TEST_URI);
+-
++  addTab(TEST_URI);
+   gBrowser.selectedBrowser.addEventListener("load", function onLoad() {
+     gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
+     testOpenUI(true);
+   }, true);
+ }
+ 
+ function testOpenUI(aTestReopen)
+ {
+   // test to see if the messages are
+   // displayed when the console UI is opened
+ 
+-  HUDService.activateHUDForContext(gBrowser.selectedTab);
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let hud = HUDService.getHudReferenceById(hudId);
++  openConsole(function(hud) {
++    testLogEntry(hud.outputNode, "log Bazzle",
++                 "Find a console log entry from before console UI is opened",
++                 false, null);
+ 
+-  testLogEntry(hud.outputNode, "log Bazzle",
+-               "Find a console log entry from before console UI is opened",
+-               false, null);
++    testLogEntry(hud.outputNode, "error Bazzle",
++                 "Find a console error entry from before console UI is opened",
++                 false, null);
+ 
+-  testLogEntry(hud.outputNode, "error Bazzle",
+-               "Find a console error entry from before console UI is opened",
+-               false, null);
++    testLogEntry(hud.outputNode, "bazBug611032", "Found the JavaScript error");
++    testLogEntry(hud.outputNode, "cssColorBug611032", "Found the CSS error");
+ 
+-  testLogEntry(hud.outputNode, "bazBug611032", "Found the JavaScript error");
+-  testLogEntry(hud.outputNode, "cssColorBug611032", "Found the CSS error");
++    HUDService.deactivateHUDForContext(gBrowser.selectedTab);
+ 
+-  HUDService.deactivateHUDForContext(gBrowser.selectedTab);
+-
+-  if (aTestReopen) {
+-    HUDService.deactivateHUDForContext(gBrowser.selectedTab);
+-    executeSoon(testOpenUI);
+-  } else {
+-    executeSoon(finish);
+-  }
++    if (aTestReopen) {
++      HUDService.deactivateHUDForContext(gBrowser.selectedTab);
++      executeSoon(testOpenUI);
++    } else {
++      executeSoon(finish);
++    }
++  });
+ }
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_abbreviate_source_url.js b/browser/devtools/webconsole/test/browser_webconsole_abbreviate_source_url.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_abbreviate_source_url.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_abbreviate_source_url.js
@@ -3532,6 +3729,34 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_580454_time
            "timestamp contains the seconds");
      isnot(localizedString.indexOf(date.getMilliseconds()), -1, "the localized " +
            "timestamp contains the milliseconds");
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
+@@ -41,20 +41,20 @@ const TEST_URI = "http://example.com/bro
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", tabLoaded, true);
+ }
+ 
+ function tabLoaded() {
+   browser.removeEventListener("load", tabLoaded, true);
+ 
+-  openConsole();
+-
+-  browser.addEventListener("load", tabReloaded, true);
+-  content.location.reload();
++  openConsole(function() {
++    browser.addEventListener("load", tabReloaded, true);
++    content.location.reload();
++  });
+ }
+ 
+ function tabReloaded() {
+   browser.removeEventListener("load", tabReloaded, true);
+ 
+   // The expected stack trace object.
+   let stacktrace = [
+     { filename: TEST_URI, lineNumber: 9, functionName: null, language: 2 },
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js b/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
@@ -3591,6 +3816,178 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_626484_outp
  function clipboardSetup() {
    goDoCommand("cmd_copy");
  }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js b/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
+@@ -37,84 +37,150 @@
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that the basic console.log()-style APIs and filtering work.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test//test-console.html";
+ 
++let testDriver = null;
++let subtestDriver = null;
++
+ registerCleanupFunction(function() {
+   Services.prefs.clearUserPref("devtools.gcli.enable");
++  testDriver = subtestDriver = null;
+ });
+ 
+ function test() {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab(TEST_URI);
+   browser.addEventListener("DOMContentLoaded", onLoad, false);
+ }
+ 
+ function onLoad() {
+   browser.removeEventListener("DOMContentLoaded", onLoad, false);
+ 
+-  openConsole();
++  openConsole(function(aHud) {
++    hud = aHud;
++    hudId = hud.hudId;
++    outputNode = hud.outputNode;
+ 
+-  hud = HUDService.getHudByWindow(content);
+-  hudId = hud.hudId;
+-  outputNode = hud.outputNode;
++    testDriver = testGen();
++    testDriver.next();
++  });
++}
+ 
+-  testConsoleLoggingAPI("log");
+-  testConsoleLoggingAPI("info");
+-  testConsoleLoggingAPI("warn");
+-  testConsoleLoggingAPI("error");
+-  testConsoleLoggingAPI("debug"); // bug 616742
++function testGen() {
++  subtestGen("log");
++  yield;
++
++  subtestGen("info");
++  yield;
++
++  subtestGen("warn");
++  yield;
++
++  subtestGen("error");
++  yield;
++
++  subtestGen("debug"); // bug 616742
++  yield;
+ 
+   finishTest();
++  yield;
++}
++
++function subtestGen(aMethod) {
++  subtestDriver = testConsoleLoggingAPI(aMethod);
++  subtestDriver.next();
+ }
+ 
+ function testConsoleLoggingAPI(aMethod) {
+   let console = content.wrappedJSObject.console;
+ 
+   hud.jsterm.clearOutput();
+ 
+   setStringFilter(hudId, "foo");
+   console[aMethod]("foo-bar-baz");
+   console[aMethod]("bar-baz");
+ 
+-  var nodes = outputNode.querySelectorAll(".hud-filtered-by-string");
++  function nextTest()
++  {
++    subtestDriver.next();
++  }
+ 
+-  is(nodes.length, 1, "1 hidden " + aMethod  + " node found (via classList)");
++  waitForSuccess({
++    name: "1 hidden " + aMethod + " node via string filtering",
++    validatorFn: function _validator()
++    {
++      return outputNode.querySelectorAll(".hud-filtered-by-string").length == 1;
++    },
++    successFn: nextTest,
++    failureFn: nextTest,
++  });
++
++  yield;
+ 
+   hud.jsterm.clearOutput();
+ 
+   // now toggle the current method off - make sure no visible message
+ 
+   // TODO: move all filtering tests into a separate test file: see bug 608135
+   setStringFilter(hudId, "");
+   HUDService.setFilterState(hudId, aMethod, false);
+   console[aMethod]("foo-bar-baz");
+-  nodes = outputNode.querySelectorAll("description");
+ 
+-  is(nodes.length, 1,  aMethod + " logging turned off, 1 message hidden");
++  waitForSuccess({
++    name: "1 message hidden for " + aMethod + " (logging turned off)",
++    validatorFn: function _validator()
++    {
++      return outputNode.querySelectorAll("description").length == 1;
++    },
++    successFn: nextTest,
++    failureFn: nextTest,
++  });
++
++  yield;
+ 
+   hud.jsterm.clearOutput();
+   HUDService.setFilterState(hudId, aMethod, true);
+   console[aMethod]("foo-bar-baz");
+-  nodes = outputNode.querySelectorAll("description");
+ 
+-  is(nodes.length, 1, aMethod + " logging turned on, 1 message shown");
++  waitForSuccess({
++    name: "1 message shown for " + aMethod + " (logging turned on)",
++    validatorFn: function _validator()
++    {
++      return outputNode.querySelectorAll("description").length == 1;
++    },
++    successFn: nextTest,
++    failureFn: nextTest,
++  });
++
++  yield;
+ 
+   hud.jsterm.clearOutput();
+   setStringFilter(hudId, "");
+ 
+   // test for multiple arguments.
+   console[aMethod]("foo", "bar");
+ 
+-  let node = outputNode.querySelector(".hud-msg-node");
+-  ok(/foo bar/.test(node.textContent),
+-    "Emitted both console arguments");
++  waitForSuccess({
++    name: "show both console arguments for " + aMethod,
++    validatorFn: function _validator()
++    {
++      let node = outputNode.querySelector(".hud-msg-node");
++      return node && /foo bar/.test(node.textContent);
++    },
++    successFn: nextTest,
++    failureFn: nextTest,
++  });
++
++  yield;
++  testDriver.next();
++  yield;
+ }
+ 
+ function setStringFilter(aId, aValue) {
+   hud.filterBox.value = aValue;
+   HUDService.adjustVisibilityOnSearchStringChange(aId, aValue);
+ }
+ 
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js b/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js
@@ -3702,3 +4099,91 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
  
  function pprint(aObj)
  {
+@@ -148,18 +150,32 @@ function testLogEntry(aOutputNode, aMatc
+  * @param string aString
+  *        The string to find.
+  */
+ function findLogEntry(aString)
+ {
+   testLogEntry(outputNode, aString, "found " + aString);
+ }
+ 
+-function openConsole()
++function openConsole(aCallback)
+ {
++  function onWebConsoleOpen(aSubject, aTopic, aData)
++  {
++    if (aTopic == "web-console-created") {
++      Services.obs.removeObserver(onWebConsoleOpen, "web-console-created");
++      aSubject.QueryInterface(Ci.nsISupportsString);
++      let hud = HUDService.getHudReferenceById(aSubject.data);
++      aCallback(hud);
++    }
++  }
++
++  if (aCallback) {
++    Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
++  }
++
+   HUDService.activateHUDForContext(tab);
+ }
+ 
+ function closeConsole()
+ {
+   HUDService.deactivateHUDForContext(tab);
+ }
+ 
+@@ -181,8 +197,53 @@ function tearDown()
+   }
+   tab = browser = hudId = hud = filterBox = outputNode = cs = null;
+ }
+ 
+ registerCleanupFunction(tearDown);
+ 
+ waitForExplicitFinish();
+ 
++/**
++ * Polls a given function waiting for it to become true.
++ *
++ * @param object aOptions
++ *        Options object with the following properties:
++ *        - validatorFn
++ *        A validator function that returns a boolean. This is called every few
++ *        milliseconds to check if the result is true. When it is true, succesFn
++ *        is called and polling stops. If validatorFn never returns true, then
++ *        polling timeouts after several tries and a failure is recorded.
++ *        - successFn
++ *        A function called when the validator function returns true.
++ *        - failureFn
++ *        A function called if the validator function timeouts - fails to return
++ *        true in the given time.
++ *        - name
++ *        Name of test. This is used to generate the success and failure
++ *        messages.
++ *        - timeout
++ *        Timeout for validator function, in milliseconds. Default is 5000.
++ */
++function waitForSuccess(aOptions)
++{
++  let start = Date.now();
++  let timeout = aOptions.timeout || 5000;
++
++  function wait(validatorFn, successFn, failureFn)
++  {
++    if ((Date.now() - start) > timeout) {
++      // Log the failure.
++      ok(false, "Timed out while waiting for: " + aOptions.name);
++      failureFn(aOptions);
++      return;
++    }
++
++    if (validatorFn(aOptions)) {
++      ok(true, aOptions.name);
++      successFn();
++    } else {
++      setTimeout(function() wait(validatorFn, successFn, failureFn), 100);
++    }
++  }
++
++  wait(aOptions.validatorFn, aOptions.successFn, aOptions.failureFn);
++}
