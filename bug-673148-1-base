@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent 6fe5b0271cd125c7a7fca5b75bc04943c6b31d08
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1334089208 -10800
+# Date 1334176104 -10800
 
 Bug 673148 - (async-webconsole) Part 1 - Make console API async
 
@@ -23,7 +23,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -0,0 +1,577 @@
+@@ -0,0 +1,579 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -530,6 +530,8 @@ new file mode 100644
 +      case "trace":
 +      case "time":
 +      case "timeEnd":
++      case "group":
++      case "groupCollapsed":
 +        aRemoteMessage.apiMessage.arguments =
 +          WebConsoleUtils.cloneObject(aOriginalMessage.arguments, true);
 +        break;
@@ -1639,15 +1641,15 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +      case "group":
 +      case "groupCollapsed":
-+        clipboardText = body = argsToString.join(" ");
++        clipboardText = body = args;
 +        sourceURL = aMessage.apiMessage.filename;
 +        sourceLine = aMessage.apiMessage.lineNumber;
-+        hud.groupDepth++;
++        this.groupDepth++;
 +        break;
 +
 +      case "groupEnd":
-+        if (hud.groupDepth > 0) {
-+          hud.groupDepth--;
++        if (this.groupDepth > 0) {
++          this.groupDepth--;
 +        }
 +        return;
 +
@@ -3315,7 +3317,7 @@ new file mode 100644
 +        };
 +
 +      default:
-+        presentable = aObject.toString();
++        presentable = String(aObject);
 +        let m = /^\[object (\S+)\]/.exec(presentable);
 +
 +        try {
@@ -3729,6 +3731,175 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_580454_time
            "timestamp contains the seconds");
      isnot(localizedString.indexOf(date.getMilliseconds()), -1, "the localized " +
            "timestamp contains the milliseconds");
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js b/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js
+@@ -52,24 +52,24 @@ function test() {
+   expectUncaughtException();
+   addTab(TEST_DUPLICATE_ERROR_URI);
+   browser.addEventListener("DOMContentLoaded", testDuplicateErrors, false);
+ }
+ 
+ function testDuplicateErrors() {
+   browser.removeEventListener("DOMContentLoaded", testDuplicateErrors,
+                               false);
+-  openConsole();
++  openConsole(function(hud) {
++    hud.jsterm.clearOutput();
+ 
+-  HUDService.getHudByWindow(content).jsterm.clearOutput();
++    Services.console.registerListener(consoleObserver);
+ 
+-  Services.console.registerListener(consoleObserver);
+-
+-  expectUncaughtException();
+-  content.location.reload();
++    expectUncaughtException();
++    content.location.reload();
++  });
+ }
+ 
+ var consoleObserver = {
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+ 
+   observe: function (aMessage)
+   {
+     // we ignore errors we don't care about
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585237_line_limit.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585237_line_limit.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_585237_line_limit.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585237_line_limit.js
+@@ -7,60 +7,118 @@
+  *  Patrick Walton <pcwalton@mozilla.com>
+  *  Mihai Șucan <mihai.sucan@gmail.com>
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that the Web Console limits the number of lines displayed according to
+ // the user's preferences.
+ 
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
++const TEST_URI = "data:text/html;charset=utf8,test for bug 585237";
++let hud, testDriver;
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testLineLimit,
+-                                            false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(function(aHud) {
++      hud = aHud;
++      testDriver = testGen();
++      testNext();
++    });
++  }, true);
+ }
+ 
+-function testLineLimit() {
+-  browser.removeEventListener("DOMContentLoaded",testLineLimit, false);
++function testNext() {
++  testDriver.next();
++}
+ 
+-  openConsole();
++function testGen() {
++  let console = content.console;
++  outputNode = hud.outputNode;
+ 
+-  let console = browser.contentWindow.wrappedJSObject.console;
+-  outputNode = HUDService.getHudByWindow(content).outputNode;
++  hud.jsterm.clearOutput();
+ 
+   let prefBranch = Services.prefs.getBranch("devtools.hud.loglimit.");
+   prefBranch.setIntPref("console", 20);
+ 
+-  for (let i = 0; i < 20; i++) {
++  for (let i = 0; i < 30; i++) {
+     console.log("foo #" + i); // must change message to prevent repeats
+   }
+ 
++  waitForSuccess({
++    name: "20 console.log messages displayed",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf("foo #29") > -1;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
++
+   is(countMessageNodes(), 20, "there are 20 message nodes in the output " +
+      "when the log limit is set to 20");
+ 
+-  console.log("bar");
++  console.log("bar bug585237");
++
++  waitForSuccess({
++    name: "another console.log message displayed",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf("bar bug585237") > -1;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
++
+   is(countMessageNodes(), 20, "there are still 20 message nodes in the " +
+      "output when adding one more");
+ 
+   prefBranch.setIntPref("console", 30);
+   for (let i = 0; i < 20; i++) {
+     console.log("boo #" + i); // must change message to prevent repeats
+   }
+ 
++  waitForSuccess({
++    name: "another 20 console.log message displayed",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf("boo #19") > -1;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
++
+   is(countMessageNodes(), 30, "there are 30 message nodes in the output " +
+      "when the log limit is set to 30");
+ 
+   prefBranch.setIntPref("console", 0);
+   console.log("baz");
+-  is(countMessageNodes(), 0, "there are no message nodes in the output when " +
+-     "the log limit is set to zero");
++
++  waitForSuccess({
++    name: "clear output",
++    validatorFn: function()
++    {
++      return countMessageNodes() == 0;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
+ 
+   prefBranch.clearUserPref("console");
+-  prefBranch = console = outputNode = null;
++  hud = testDriver = prefBranch = console = outputNode = null;
+   finishTest();
++
++  yield;
+ }
+ 
+ function countMessageNodes() {
+   return outputNode.querySelectorAll(".hud-msg-node").length;
+ }
+ 
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
@@ -3760,7 +3931,93 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585956_cons
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js b/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
-@@ -74,16 +74,16 @@ function testContextMenuCopy() {
+@@ -12,55 +12,62 @@ const TEST_URI = "http://example.com/bro
+ 
+ registerCleanupFunction(function() {
+   Services.prefs.clearUserPref("devtools.gcli.enable");
+ });
+ 
+ function test() {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab(TEST_URI);
+-  browser.addEventListener("load", tabLoaded, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(consoleOpened);
++  }, true);
+ }
+ 
+-function tabLoaded() {
+-  browser.removeEventListener("load", tabLoaded, true);
+-  openConsole();
+-
++function consoleOpened(HUD) {
+   // See bugs 574036, 586386 and 587617.
+ 
+-  let HUD = HUDService.getHudByWindow(content);
+   outputNode = HUD.outputNode;
+   let selection = getSelection();
+   let jstermInput = HUD.jsterm.inputNode;
+   let console = content.wrappedJSObject.console;
+   let contentSelection = content.wrappedJSObject.getSelection();
+ 
+-  let make_selection = function () {
+-    let controller =
+-      top.document.commandDispatcher.
+-      getControllerForCommand("cmd_copy");
+-    is(controller.isCommandEnabled("cmd_copy"), false, "cmd_copy is disabled");
++  HUD.jsterm.clearOutput();
+ 
+-    console.log("Hello world!");
++  let controller = top.document.commandDispatcher.
++                   getControllerForCommand("cmd_copy");
++  is(controller.isCommandEnabled("cmd_copy"), false, "cmd_copy is disabled");
+ 
+-    outputNode.selectedIndex = 0;
+-    outputNode.focus();
++  console.log("Hello world! bug587617");
+ 
+-    goUpdateCommand("cmd_copy");
++  waitForSuccess({
++    name: "console log 'Hello world!' message",
++    validatorFn: function _validator()
++    {
++      return outputNode.textContent.indexOf("bug587617") > -1;
++    },
++    successFn: function _success()
++    {
++      outputNode.selectedIndex = 0;
++      outputNode.focus();
+ 
+-    controller = top.document.commandDispatcher.
+-      getControllerForCommand("cmd_copy");
+-    is(controller.isCommandEnabled("cmd_copy"), true, "cmd_copy is enabled");
++      goUpdateCommand("cmd_copy");
+ 
+-    let selectedNode = outputNode.getItemAtIndex(0);
+-    waitForClipboard(getExpectedClipboardText(selectedNode), clipboardSetup,
+-                     testContextMenuCopy, testContextMenuCopy);
+-  };
++      controller = top.document.commandDispatcher.
++        getControllerForCommand("cmd_copy");
++      is(controller.isCommandEnabled("cmd_copy"), true, "cmd_copy is enabled");
+ 
+-  make_selection();
++      let selectedNode = outputNode.getItemAtIndex(0);
++      waitForClipboard(getExpectedClipboardText(selectedNode), clipboardSetup,
++                       testContextMenuCopy, testContextMenuCopy);
++    },
++    failureFn: finishTest,
++  });
+ }
+ 
+ // Test that the context menu "Copy" (which has a different code path) works
+ // properly as well.
+ function testContextMenuCopy() {
+   let contextMenuId = outputNode.getAttribute("context");
+   let contextMenu = document.getElementById(contextMenuId);
+   ok(contextMenu, "the output node has a context menu");
+@@ -74,16 +81,16 @@ function testContextMenuCopy() {
    copyItem.dispatchEvent(commandEvent);
  
    let selectedNode = outputNode.getItemAtIndex(0);
@@ -3778,6 +4035,412 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_outp
    goDoCommand("cmd_copy");
  }
  
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_588730_text_node_insertion.js b/browser/devtools/webconsole/test/browser_webconsole_bug_588730_text_node_insertion.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_588730_text_node_insertion.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_588730_text_node_insertion.js
+@@ -39,51 +39,46 @@
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that adding text to one of the output labels doesn't cause errors.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testTextNodeInsertion,
+-                           false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(testTextNodeInsertion);
++  }, true);
+ }
+ 
+ // Test for bug 588730: Adding a text node to an existing label element causes
+ // warnings
+-function testTextNodeInsertion() {
+-  browser.removeEventListener("DOMContentLoaded", testTextNodeInsertion,
+-                              false);
+-  openConsole();
+-
+-  let outputNode = HUDService.getHudByWindow(content).outputNode;
++function testTextNodeInsertion(hud) {
++  let outputNode = hud.outputNode;
+ 
+   let label = document.createElementNS(
+     "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul", "label");
+   outputNode.appendChild(label);
+ 
+   let error = false;
+   let listener = {
+     observe: function(aMessage) {
+       let messageText = aMessage.message;
+       if (messageText.indexOf("JavaScript Warning") !== -1) {
+         error = true;
+       }
+     }
+   };
+ 
+-  let nsIConsoleServiceClass = Cc["@mozilla.org/consoleservice;1"];
+-  let nsIConsoleService =
+-    nsIConsoleServiceClass.getService(Ci.nsIConsoleService);
+-  nsIConsoleService.registerListener(listener);
++  Services.console.registerListener(listener);
+ 
+   // This shouldn't fail.
+   label.appendChild(document.createTextNode("foo"));
+ 
+   executeSoon(function() {
+-    nsIConsoleService.unregisterListener(listener);
++    Services.console.unregisterListener(listener);
+     ok(!error, "no error when adding text nodes as children of labels");
+ 
+     finishTest();
+   });
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+@@ -87,96 +87,122 @@ let inputValues = [
+   [true, "({a:'b', c:'d', e:1, f:'2'})", '({a:"b", c:"d", e:1, f:"2"})',
+     "[object Object",
+     '({a:"b", c:"d", e:1, f:"2"})'],
+ ];
+ 
+ let eventHandlers = [];
+ let popupShown = [];
+ let HUD;
++let testDriver;
+ 
+ function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++  browser.removeEventListener(aEvent.type, tabLoad, true);
+ 
+   waitForFocus(function () {
+-    openConsole();
+-
+-    let hudId = HUDService.getHudIdByWindow(content);
+-    HUD = HUDService.hudReferences[hudId];
+-
+-    executeSoon(testNext);
++    openConsole(function(aHud) {
++      HUD = aHud;
++      testNext();
++    });
+   }, content);
+ }
+ 
++function subtestNext() {
++  testDriver.next();
++}
++
+ function testNext() {
+-  let cpos = ++pos;
+-  if (cpos == inputValues.length) {
+-    if (popupShown.length == inputValues.length) {
+-      executeSoon(testEnd);
+-    }
++  pos++;
++  if (pos == inputValues.length) {
++    testEnd();
+     return;
+   }
+ 
++  testDriver = testGen();
++  testDriver.next();
++}
++
++function testGen() {
++  let cpos = pos;
++
+   let showsPropertyPanel = inputValues[cpos][0];
+   let inputValue = inputValues[cpos][1];
+   let expectedOutput = inputValues[cpos][2];
+ 
+   let printOutput = inputValues[cpos].length >= 4 ?
+     inputValues[cpos][3] : expectedOutput;
+ 
+   let consoleOutput = inputValues[cpos].length >= 5 ?
+     inputValues[cpos][4] : printOutput;
+ 
+   let consoleTest = inputValues[cpos][5] || inputValue;
+ 
+   HUD.jsterm.clearOutput();
+ 
++  // Test the console.log() output.
++
+   // Ugly but it does the job.
+   with (content) {
+     eval("HUD.console.log(" + consoleTest + ")");
+   }
+ 
+-  let outputItem = HUD.outputNode.
+-    querySelector(".hud-log:last-child");
++  waitForSuccess({
++    name: "console.log message for test #" + cpos,
++    validatorFn: function _validator()
++    {
++      return HUD.outputNode.querySelector(".hud-log");
++    },
++    successFn: subtestNext,
++    failureFn: testNext,
++  });
++
++  yield;
++
++  let outputItem = HUD.outputNode.querySelector(".hud-log:last-child");
+   ok(outputItem,
+     "found the window.console output line for inputValues[" + cpos + "]");
+   ok(outputItem.textContent.indexOf(consoleOutput) > -1,
+     "console API output is correct for inputValues[" + cpos + "]");
+ 
+   HUD.jsterm.clearOutput();
+ 
++  // Test jsterm print() output.
++
+   HUD.jsterm.setInputValue("print(" + inputValue + ")");
+   HUD.jsterm.execute();
+ 
+   outputItem = HUD.outputNode.querySelector(".webconsole-msg-output:" +
+                                             "last-child");
+   ok(outputItem,
+     "found the jsterm print() output line for inputValues[" + cpos + "]");
+   ok(outputItem.textContent.indexOf(printOutput) > -1,
+     "jsterm print() output is correct for inputValues[" + cpos + "]");
+ 
++  // Test jsterm execution output.
++
+   let eventHandlerID = eventHandlers.length + 1;
+ 
+   let propertyPanelShown = function(aEvent) {
+     let label = aEvent.target.getAttribute("label");
+     if (!label || label.indexOf(inputValue) == -1) {
+       return;
+     }
+ 
+-    document.removeEventListener(aEvent.type, arguments.callee, false);
++    document.removeEventListener(aEvent.type, propertyPanelShown, false);
+     eventHandlers[eventHandlerID] = null;
+ 
+     ok(showsPropertyPanel,
+       "the property panel shown for inputValues[" + cpos + "]");
+ 
+     aEvent.target.hidePopup();
+ 
+     popupShown[cpos] = true;
+-    if (popupShown.length == inputValues.length) {
+-      executeSoon(testEnd);
++
++    if (showsPropertyPanel) {
++      subtestNext();
+     }
+   };
+ 
+   document.addEventListener("popupshown", propertyPanelShown, false);
+ 
+   eventHandlers.push(propertyPanelShown);
+ 
+   HUD.jsterm.clearOutput();
+@@ -187,25 +213,31 @@ function testNext() {
+                                             "last-child");
+   ok(outputItem, "found the jsterm output line for inputValues[" + cpos + "]");
+   ok(outputItem.textContent.indexOf(expectedOutput) > -1,
+     "jsterm output is correct for inputValues[" + cpos + "]");
+ 
+   let messageBody = outputItem.querySelector(".webconsole-msg-body");
+   ok(messageBody, "we have the message body for inputValues[" + cpos + "]");
+ 
+-  messageBody.addEventListener("click", function(aEvent) {
+-    this.removeEventListener(aEvent.type, arguments.callee, false);
+-    executeSoon(testNext);
+-  }, false);
+-
+   // Send the mousedown, mouseup and click events to check if the property
+   // panel opens.
+   EventUtils.sendMouseEvent({ type: "mousedown" }, messageBody, window);
+   EventUtils.sendMouseEvent({ type: "click" }, messageBody, window);
++
++  if (showsPropertyPanel) {
++    dump("waiting for panel " + cpos + "\n");
++    yield; // wait for the panel to open if we need to.
++  } else {
++    dump("not waiting for panel " + cpos + "\n");
++  }
++
++  testNext();
++
++  yield;
+ }
+ 
+ function testEnd() {
+   if (testEnded) {
+     return;
+   }
+ 
+   testEnded = true;
+@@ -222,16 +254,17 @@ function testEnd() {
+     }
+   }
+ 
+   executeSoon(finishTest);
+ }
+ 
+ registerCleanupFunction(function() {
+   Services.prefs.clearUserPref("devtools.gcli.enable");
++  testDriver = null;
+ });
+ 
+ function test() {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab(TEST_URI);
+   browser.addEventListener("load", tabLoad, true);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
+@@ -3,23 +3,18 @@
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  *
+  * Contributor(s):
+  *  Mihai Șucan <mihai.sucan@gmail.com>
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+-function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
+-
+-  openConsole();
+-
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let HUD = HUDService.hudReferences[hudId];
++function consoleOpened(HUD) {
++  HUD.jsterm.clearOutput();
+ 
+   let longMessage = "";
+   for (let i = 0; i < 50; i++) {
+     longMessage += "LongNonwrappingMessage";
+   }
+ 
+   for (let i = 0; i < 50; i++) {
+     HUD.console.log("test message " + i);
+@@ -28,17 +23,17 @@ function tabLoad(aEvent) {
+   HUD.console.log(longMessage);
+ 
+   for (let i = 0; i < 50; i++) {
+     HUD.console.log("test message " + i);
+   }
+ 
+   HUD.jsterm.execute("1+1");
+ 
+-  executeSoon(function() {
++  function performTest() {
+     let scrollBox = HUD.outputNode.scrollBoxObject.element;
+     isnot(scrollBox.scrollTop, 0, "scroll location is not at the top");
+ 
+     let node = HUD.outputNode.getItemAtIndex(HUD.outputNode.itemCount - 1);
+     let rectNode = node.getBoundingClientRect();
+     let rectOutput = HUD.outputNode.getBoundingClientRect();
+ 
+     // Visible scroll viewport.
+@@ -49,21 +44,34 @@ function tabLoad(aEvent) {
+ 
+     // Bottom position of the last message node, relative to the outputNode.
+     let bottom = rectNode.bottom - rectOutput.top;
+ 
+     ok(top >= 0 && Math.floor(bottom) <= height + 1,
+        "last message is visible");
+ 
+     finishTest();
++  };
++
++  waitForSuccess({
++    name: "console output displayed",
++    validatorFn: function()
++    {
++      return HUD.outputNode.itemCount == 103;
++    },
++    successFn: performTest,
++    failureFn: finishTest,
+   });
+ }
+ 
+ registerCleanupFunction(function() {
+   Services.prefs.clearUserPref("devtools.gcli.enable");
+ });
+ 
+ function test() {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 601352");
+-  browser.addEventListener("load", tabLoad, true);
++  browser.addEventListener("load", function tabLoad(aEvent) {
++    browser.removeEventListener(aEvent.type, tabLoad, true);
++    openConsole(consoleOpened);
++  }, true);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js b/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
+@@ -19,39 +19,44 @@ function onContentLoaded()
+   is(node.childNodes[2].textContent, "Unknown property '-moz-opacity'.  Declaration dropped.", "correct node")
+   is(node.childNodes[3].firstChild.getAttribute("value"), 2, msg);
+ 
+   jsterm.clearOutput();
+ 
+   jsterm.setInputValue("for (let i = 0; i < 10; ++i) console.log('this is a line of reasonably long text that I will use to verify that the repeated text node is of an appropriate size.');");
+   jsterm.execute();
+ 
+-  let msg = "The console output is repeated 10 times";
+-  let node = outputNode.querySelector(".webconsole-msg-console");
+-  is(node.childNodes[3].firstChild.getAttribute("value"), 10, msg);
+-
+-  jsterm.clearOutput();
+-  finishTest();
++  waitForSuccess({
++    name: "10 repeated console.log messages",
++    validatorFn: function _validator()
++    {
++      let node = outputNode.querySelector(".webconsole-msg-console");
++      return node && node.childNodes[3].firstChild.getAttribute("value") == 10;
++    },
++    successFn: finishTest,
++    failureFn: finishTest,
++  });
+ }
+ 
+ registerCleanupFunction(function() {
+   Services.prefs.clearUserPref("devtools.gcli.enable");
+ });
+ 
+ /**
+  * Unit test for bug 611795:
+  * Repeated CSS messages get collapsed into one.
+  */
+ function test()
+ {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab(TEST_URI);
+-  browser.addEventListener("load", function() {
+-    browser.removeEventListener("load", arguments.callee, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
+ 
+-    openConsole();
+-    // Clear cached messages that are shown once the Web Console opens.
+-    HUDService.getHudByWindow(content).jsterm.clearOutput(true);
++    openConsole(function(aHud) {
++      // Clear cached messages that are shown once the Web Console opens.
++      aHud.jsterm.clearOutput(true);
+ 
+-    browser.addEventListener("load", onContentLoaded, true);
+-    content.location.reload();
++      browser.addEventListener("load", onContentLoaded, true);
++      content.location.reload();
++    });
+   }, true);
+ }
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js b/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js
@@ -3794,10 +4457,375 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jste
 +  return "[" + WebConsoleUtils.l10n.timestampString(aItem.timestamp) + "] " +
           aItem.clipboardText;
  }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
+@@ -2,60 +2,103 @@
+ /*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  *
+  * Contributor(s):
+  *   Mihai Șucan <mihai.sucan@gmail.com>
+  */
+ 
+-function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++let hud, testDriver;
+ 
+-  openConsole();
++function testNext() {
++  testDriver.next();
++}
+ 
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let hud = HUDService.hudReferences[hudId];
++function testGen() {
++  hud.jsterm.clearOutput();
+   let outputNode = hud.outputNode;
+   let scrollBox = outputNode.scrollBoxObject.element;
+ 
+   for (let i = 0; i < 150; i++) {
+     hud.console.log("test message " + i);
+   }
+ 
++  waitForSuccess({
++    name: "150 console.log messages displayed",
++    validatorFn: function _validator()
++    {
++      return outputNode.querySelectorAll(".hud-log").length == 150;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
++
+   let oldScrollTop = scrollBox.scrollTop;
+   ok(oldScrollTop > 0, "scroll location is not at the top");
+ 
+   // scroll to the first node
+   outputNode.focus();
+ 
+   EventUtils.synthesizeKey("VK_HOME", {});
+ 
+   let topPosition = scrollBox.scrollTop;
+   isnot(topPosition, oldScrollTop, "scroll location updated (moved to top)");
+ 
+-  executeSoon(function() {
+-    // add a message and make sure scroll doesn't change
+-    hud.console.log("test message 150");
++  // add a message and make sure scroll doesn't change
++  hud.console.log("test message 150");
+ 
+-    is(scrollBox.scrollTop, topPosition, "scroll location is still at the top");
++  waitForSuccess({
++    name: "console.log message no. 151 displayed",
++    validatorFn: function _validator()
++    {
++      return outputNode.querySelectorAll(".hud-log").length == 151;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
+ 
+-    // scroll back to the bottom
+-    outputNode.lastChild.focus();
+-    EventUtils.synthesizeKey("VK_END", {});
++  yield;
+ 
+-    executeSoon(function() {
+-      oldScrollTop = outputNode.scrollTop;
++  is(scrollBox.scrollTop, topPosition, "scroll location is still at the top");
+ 
+-      hud.console.log("test message 151");
++  // scroll back to the bottom
++  outputNode.lastChild.focus();
++  EventUtils.synthesizeKey("VK_END", {});
+ 
+-      isnot(scrollBox.scrollTop, oldScrollTop,
+-            "scroll location updated (moved to bottom)");
++  oldScrollTop = outputNode.scrollTop;
+ 
+-      finishTest();
+-    });
++  hud.console.log("test message 151");
++
++  waitForSuccess({
++    name: "console.log message no. 152 displayed",
++    validatorFn: function _validator()
++    {
++      return outputNode.querySelectorAll(".hud-log").length == 152;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
+   });
++
++  yield;
++
++  isnot(scrollBox.scrollTop, oldScrollTop,
++        "scroll location updated (moved to bottom)");
++
++  hud = testDriver = null;
++  finishTest();
++  
++  yield;
+ }
+ 
+ function test() {
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 613642: remember scroll location");
+-  browser.addEventListener("load", tabLoad, true);
++  browser.addEventListener("load", function tabLoad(aEvent) {
++    browser.removeEventListener(aEvent.type, tabLoad, true);
++    openConsole(function(aHud) {
++      hud = aHud;
++      testDriver = testGen();
++      testDriver.next();
++    });
++  }, true);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
+@@ -2,34 +2,48 @@
+ /*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  *
+  * Contributor(s):
+  *   Mihai Șucan <mihai.sucan@gmail.com>
+  */
+ 
+-function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++let hud, testDriver;
+ 
+-  openConsole();
++function testNext() {
++  testDriver.next();
++}
+ 
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let hud = HUDService.hudReferences[hudId];
++function testGen() {
++  hud.jsterm.clearOutput();
++
+   let outputNode = hud.outputNode;
+   let oldPref = Services.prefs.getIntPref("devtools.hud.loglimit.console");
+ 
+   Services.prefs.setIntPref("devtools.hud.loglimit.console", 140);
+   let scrollBoxElement = outputNode.scrollBoxObject.element;
+   let boxObject = outputNode.scrollBoxObject;
+ 
+   for (let i = 0; i < 150; i++) {
+     hud.console.log("test message " + i);
+   }
+ 
++  waitForSuccess({
++    name: "150 console.log messages displayed",
++    validatorFn: function _validator()
++    {
++      return outputNode.querySelectorAll(".hud-log").length == 140;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
++
+   let oldScrollTop = scrollBoxElement.scrollTop;
+   ok(oldScrollTop > 0, "scroll location is not at the top");
+ 
+   let firstNode = outputNode.firstChild;
+   ok(firstNode, "found the first message");
+ 
+   let msgNode = outputNode.querySelectorAll("richlistitem")[80];
+   ok(msgNode, "found the 80th message");
+@@ -40,24 +54,48 @@ function tabLoad(aEvent) {
+   isnot(scrollBoxElement.scrollTop, oldScrollTop,
+         "scroll location updated (scrolled to message)");
+ 
+   oldScrollTop = scrollBoxElement.scrollTop;
+ 
+   // add a message
+   hud.console.log("hello world");
+ 
++  waitForSuccess({
++    name: "console.log message #151 displayed",
++    validatorFn: function _validator()
++    {
++      return outputNode.textContent.indexOf("hello world") > -1;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
++
+   // Scroll location needs to change, because one message is also removed, and
+   // we need to scroll a bit towards the top, to keep the current view in sync.
+   isnot(scrollBoxElement.scrollTop, oldScrollTop,
+         "scroll location updated (added a message)");
+ 
+   isnot(outputNode.firstChild, firstNode,
+         "first message removed");
+ 
+   Services.prefs.setIntPref("devtools.hud.loglimit.console", oldPref);
++
++  hud = testDriver = null;
+   finishTest();
++
++  yield;
+ }
+ 
+ function test() {
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 613642: maintain scroll with pruning of old messages");
+-  browser.addEventListener("load", tabLoad, true);
++  browser.addEventListener("load", function tabLoad(aEvent) {
++    browser.removeEventListener(aEvent.type, tabLoad, true);
++
++    openConsole(function(aHud) {
++      hud = aHud;
++      testDriver = testGen();
++      testDriver.next();
++    });
++  }, true);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js
+@@ -2,47 +2,57 @@
+ /*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  *
+  * Contributor(s):
+  *   Mihai Șucan <mihai.sucan@gmail.com>
+  */
+ 
+-function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++function consoleOpened(hud) {
++  hud.jsterm.clearOutput();
+ 
+-  openConsole();
+-
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let hud = HUDService.hudReferences[hudId];
+   let outputNode = hud.outputNode;
+   let boxObject = outputNode.scrollBoxObject.element;
+ 
+   for (let i = 0; i < 150; i++) {
+     hud.console.log("test message " + i);
+   }
+ 
+-  let oldScrollTop = boxObject.scrollTop;
+-  ok(oldScrollTop > 0, "scroll location is not at the top");
++  waitForSuccess({
++    name: "console.log messages displayed",
++    validatorFn: function()
++    {
++      return outputNode.itemCount == 150;
++    },
++    successFn: function()
++    {
++      let oldScrollTop = boxObject.scrollTop;
++      ok(oldScrollTop > 0, "scroll location is not at the top");
+ 
+-  hud.jsterm.execute("'hello world'");
++      hud.jsterm.execute("'hello world'");
+ 
+-  isnot(boxObject.scrollTop, oldScrollTop, "scroll location updated");
++      isnot(boxObject.scrollTop, oldScrollTop, "scroll location updated");
+ 
+-  oldScrollTop = boxObject.scrollTop;
+-  outputNode.scrollBoxObject.ensureElementIsVisible(outputNode.lastChild);
++      oldScrollTop = boxObject.scrollTop;
++      outputNode.scrollBoxObject.ensureElementIsVisible(outputNode.lastChild);
+ 
+-  is(boxObject.scrollTop, oldScrollTop, "scroll location is the same");
++      is(boxObject.scrollTop, oldScrollTop, "scroll location is the same");
+ 
+-  finishTest();
++      finishTest();
++    },
++    failureFn: finishTest,
++  });
+ }
+ 
+ registerCleanupFunction(function() {
+   Services.prefs.clearUserPref("devtools.gcli.enable");
+ });
+ 
+ function test() {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 614793: jsterm result scroll");
+-  browser.addEventListener("load", tabLoad, true);
++  browser.addEventListener("load", function onLoad(aEvent) {
++    browser.removeEventListener(aEvent.type, onLoad, true);
++    openConsole(consoleOpened);
++  }, true);
+ }
+ 
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js b/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js
-@@ -50,17 +50,17 @@ function nextTest() {
+@@ -4,36 +4,44 @@ let itemsSet, HUD;
+ 
+ registerCleanupFunction(function() {
+   Services.prefs.clearUserPref("devtools.gcli.enable");
+ });
+ 
+ function test() {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 626484");
+-  browser.addEventListener("load", tabLoaded, true);
++  browser.addEventListener("load", function tabLoaded(aEvent) {
++    browser.removeEventListener(aEvent.type, tabLoaded, true);
++    openConsole(consoleOpened);
++  }, true);
+ }
+ 
+-function tabLoaded(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
+-  openConsole();
++function consoleOpened(aHud) {
++  HUD = aHud;
++  outputNode = HUD.outputNode;
++  HUD.jsterm.clearOutput();
+ 
+-  let console = browser.contentWindow.wrappedJSObject.console;
++  let console = content.wrappedJSObject.console;
+   console.log("The first line.");
+   console.log("The second line.");
+   console.log("The last line.");
+ 
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  HUD = HUDService.hudReferences[hudId];
+-  outputNode = HUD.outputNode;
+-
+   itemsSet = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1],
+     [2, 1, 0]];
+ 
+-  nextTest();
++  waitForSuccess({
++    name: "console.log messages displayed",
++    validatorFn: function _validator()
++    {
++      return outputNode.querySelectorAll(".hud-log").length == 3;
++    },
++    successFn: nextTest,
++    failureFn: finish,
++  });
+ }
+ 
+ function nextTest() {
+   if (itemsSet.length === 0) {
+     outputNode.clearSelection();
+     HUD.jsterm.clearOutput();
+     HUD = null;
+     finish();
+@@ -50,17 +58,17 @@ function nextTest() {
    }
  }
  
@@ -3816,6 +4844,486 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_626484_outp
  function clipboardSetup() {
    goDoCommand("cmd_copy");
  }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js b/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
+@@ -21,61 +21,84 @@ function test() {
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 644419: Console should " +
+          "have user-settable log limits for each message category");
+   browser.addEventListener("load", onLoad, true);
+ }
+ 
+ function onLoad(aEvent) {
+   browser.removeEventListener(aEvent.type, arguments.callee, true);
+ 
+-  openConsole();
++  openConsole(function(aHud) {
++    gHudId = aHud.hudId;
++    aHud.jsterm.clearOutput();
+ 
+-  gHudId = HUDService.getHudIdByWindow(content);
+-  browser.addEventListener("load", testWebDevLimits, true);
+-  expectUncaughtException();
+-  content.location = TEST_URI;
++    browser.addEventListener("load", testWebDevLimits, true);
++    expectUncaughtException();
++    content.location = TEST_URI;
++  });
+ }
+ 
+ function testWebDevLimits(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++  browser.removeEventListener(aEvent.type, testWebDevLimits, true);
+   gOldPref = Services.prefs.getIntPref("devtools.hud.loglimit.console");
+   Services.prefs.setIntPref("devtools.hud.loglimit.console", 10);
+ 
+   let hud = HUDService.hudReferences[gHudId];
+   outputNode = hud.outputNode;
+ 
+-  executeSoon(function() {
+-    // Find the sentinel entry.
+-    findLogEntry("bar is not defined");
++  // Find the sentinel entry.
++  findLogEntry("bar is not defined");
+ 
+-    // Fill the log with Web Developer errors.
+-    for (let i = 0; i < 11; i++) {
+-      hud.console.log("test message " + i);
+-    }
+-    testLogEntry(outputNode, "test message 0", "first message is pruned", false, true);
+-    findLogEntry("test message 1");
+-    // Check if the sentinel entry is still there.
+-    findLogEntry("bar is not defined");
++  // Fill the log with Web Developer errors.
++  for (let i = 0; i < 11; i++) {
++    hud.console.log("test message " + i);
++  }
+ 
+-    Services.prefs.setIntPref("devtools.hud.loglimit.console", gOldPref);
+-    testJsLimits();
++  waitForSuccess({
++    name: "11 console.log messages displayed",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf("test message 10") > -1;
++    },
++    successFn: function()
++    {
++      testLogEntry(outputNode, "test message 0", "first message is pruned", false, true);
++      findLogEntry("test message 1");
++      // Check if the sentinel entry is still there.
++      findLogEntry("bar is not defined");
++
++      Services.prefs.setIntPref("devtools.hud.loglimit.console", gOldPref);
++      testJsLimits();
++    },
++    failureFn: testJsLimits,
+   });
+ }
+ 
+-function testJsLimits(aEvent) {
++function testJsLimits() {
+   gOldPref = Services.prefs.getIntPref("devtools.hud.loglimit.exception");
+   Services.prefs.setIntPref("devtools.hud.loglimit.exception", 10);
+ 
+   let hud = HUDService.hudReferences[gHudId];
+   hud.jsterm.clearOutput();
+   outputNode = hud.outputNode;
+   hud.console.log("testing JS limits");
+ 
+   // Find the sentinel entry.
+-  findLogEntry("testing JS limits");
++  waitForSuccess({
++    name: "console.log 'testing JS limits'",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf("testing JS limits") > -1;
++    },
++    successFn: testJsLimits2,
++    failureFn: testNetLimits,
++  });
++}
++
++function testJsLimits2() {
+   // Fill the log with JS errors.
+   let head = content.document.getElementsByTagName("head")[0];
+   for (let i = 0; i < 11; i++) {
+     var script = content.document.createElement("script");
+     script.text = "fubar" + i + ".bogus(6);";
+     expectUncaughtException();
+     head.insertBefore(script, head.firstChild);
+   }
+@@ -88,30 +111,40 @@ function testJsLimits(aEvent) {
+ 
+     Services.prefs.setIntPref("devtools.hud.loglimit.exception", gOldPref);
+     testNetLimits();
+   });
+ }
+ 
+ var gCounter, gImage;
+ 
+-function testNetLimits(aEvent) {
++function testNetLimits() {
+   gOldPref = Services.prefs.getIntPref("devtools.hud.loglimit.network");
+   Services.prefs.setIntPref("devtools.hud.loglimit.network", 10);
+ 
+   let hud = HUDService.hudReferences[gHudId];
+   hud.jsterm.clearOutput();
+   outputNode = hud.outputNode;
+   hud.console.log("testing Net limits");
+ 
+   // Find the sentinel entry.
+-  findLogEntry("testing Net limits");
+-  // Fill the log with network messages.
+-  gCounter = 0;
+-  loadImage();
++  waitForSuccess({
++    name: "console.log 'testing Net limits'",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf("testing Net limits") > -1;
++    },
++    successFn: function()
++    {
++      // Fill the log with network messages.
++      gCounter = 0;
++      loadImage();
++    },
++    failureFn: testCssLimits,
++  });
+ }
+ 
+ function loadImage() {
+   if (gCounter < 11) {
+     let body = content.document.getElementsByTagName("body")[0];
+     gImage && gImage.removeEventListener("load", loadImage, true);
+     gImage = content.document.createElement("img");
+     gImage.src = "test-image.png?_fubar=" + gCounter;
+@@ -125,28 +158,38 @@ function loadImage() {
+   findLogEntry("test-image.png?_fubar=1");
+   // Check if the sentinel entry is still there.
+   findLogEntry("testing Net limits");
+ 
+   Services.prefs.setIntPref("devtools.hud.loglimit.network", gOldPref);
+   testCssLimits();
+ }
+ 
+-function testCssLimits(aEvent) {
++function testCssLimits() {
+   gOldPref = Services.prefs.getIntPref("devtools.hud.loglimit.cssparser");
+   Services.prefs.setIntPref("devtools.hud.loglimit.cssparser", 10);
+ 
+   let hud = HUDService.hudReferences[gHudId];
+   hud.jsterm.clearOutput();
+   outputNode = hud.outputNode;
+   hud.console.log("testing CSS limits");
+ 
+   // Find the sentinel entry.
+-  findLogEntry("testing CSS limits");
++  waitForSuccess({
++    name: "console.log 'testing CSS limits'",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf("testing CSS limits") > -1;
++    },
++    successFn: testCssLimits2,
++    failureFn: finishTest,
++  });
++}
+ 
++function testCssLimits2() {
+   // Fill the log with CSS errors.
+   let body = content.document.getElementsByTagName("body")[0];
+   for (let i = 0; i < 11; i++) {
+     var div = content.document.createElement("div");
+     div.setAttribute("style", "-moz-foobar" + i + ": 42;");
+     body.insertBefore(div, body.firstChild);
+   }
+   executeSoon(function() {
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js b/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
+@@ -4,42 +4,52 @@
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  */
+ 
+ // Tests that console.dir works as intended.
+ 
+ function test() {
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 659907: Expand console " +
+          "object with a dir method");
+-  browser.addEventListener("load", onLoad, true);
++  browser.addEventListener("load", function onLoad(aEvent) {
++    browser.removeEventListener(aEvent.type, onLoad, true);
++    openConsole(consoleOpened);
++  }, true);
+ }
+ 
+-function onLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
+-
+-  openConsole();
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let hud = HUDService.hudReferences[hudId];
++function consoleOpened(hud) {
+   outputNode = hud.outputNode;
+   content.console.dir(content.document);
+-  findLogEntry("[object HTMLDocument");
++  waitForSuccess({
++    name: "console.dir displayed",
++    validatorFn: function _validator()
++    {
++      return outputNode.textContent.indexOf("[object HTMLDocument") > -1;
++    },
++    successFn: testConsoleDir.bind(null, outputNode),
++    failureFn: finishTest,
++  });
++}
++
++function testConsoleDir(outputNode) {
+   let msg = outputNode.querySelectorAll(".webconsole-msg-inspector");
+   is(msg.length, 1, "one message node displayed");
+-  let rows = msg[0].propertyTreeView._rows;
++  let view = msg[0].propertyTreeView;
+   let foundQSA = false;
+   let foundLocation = false;
+   let foundWrite = false;
+-  for (let i = 0; i < rows.length; i++) {
+-    if (rows[i].display == "querySelectorAll: function querySelectorAll()") {
++  for (let i = 0; i < view.rowCount; i++) {
++    let text = view.getCellText(i);
++    if (text == "querySelectorAll: function querySelectorAll()") {
+       foundQSA = true;
+     }
+-    else if (rows[i].display  == "location: Object") {
++    else if (text  == "location: Object") {
+       foundLocation = true;
+     }
+-    else if (rows[i].display  == "write: function write()") {
++    else if (text  == "write: function write()") {
+       foundWrite = true;
+     }
+   }
+   ok(foundQSA, "found document.querySelectorAll");
+   ok(foundLocation, "found document.location");
+   ok(foundWrite, "found document.write");
+   finishTest();
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_664131_console_group.js b/browser/devtools/webconsole/test/browser_webconsole_bug_664131_console_group.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_664131_console_group.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_664131_console_group.js
+@@ -2,60 +2,133 @@
+ /*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  */
+ 
+ // Tests that console.group/groupEnd works as intended.
+ const GROUP_INDENT = 12;
+ 
++let testDriver, hud;
++
+ registerCleanupFunction(function() {
+   Services.prefs.clearUserPref("devtools.gcli.enable");
++  testDriver = hud = null;
+ });
+ 
+ function test() {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 664131: Expand console " +
+          "object with group methods");
+-  browser.addEventListener("load", onLoad, true);
++  browser.addEventListener("load", function onLoad(aEvent) {
++    browser.removeEventListener(aEvent.type, onLoad, true);
++    openConsole(function(aHud) {
++      hud = aHud;
++      testDriver = testGen();
++      testNext();
++    });
++  }, true);
+ }
+ 
+-function onLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++function testNext() {
++  testDriver.next();
++}
+ 
+-  openConsole();
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let hud = HUDService.hudReferences[hudId];
++function testGen() {
+   outputNode = hud.outputNode;
++  hud.jsterm.clearOutput();
++  content.console.group("bug664131a");
+ 
+-  content.console.group("a");
+-  findLogEntry("a");
++  waitForSuccess({
++    name: "console.group displayed",
++    validatorFn: function _validator()
++    {
++      return outputNode.textContent.indexOf("bug664131a") > -1;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
++
+   let msg = outputNode.querySelectorAll(".webconsole-msg-icon-container");
+   is(msg.length, 1, "one message node displayed");
+   is(msg[0].style.marginLeft, GROUP_INDENT + "px", "correct group indent found");
+-  content.console.log("inside");
+-  findLogEntry("inside");
+-  let msg = outputNode.querySelectorAll(".webconsole-msg-icon-container");
++
++  content.console.log("bug664131-inside");
++
++  waitForSuccess({
++    name: "console.log message displayed",
++    validatorFn: function _validator()
++    {
++      return outputNode.textContent.indexOf("bug664131-inside") > -1;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
++
++  msg = outputNode.querySelectorAll(".webconsole-msg-icon-container");
+   is(msg.length, 2, "two message nodes displayed");
+   is(msg[1].style.marginLeft, GROUP_INDENT + "px", "correct group indent found");
+-  content.console.groupEnd("a");
+-  content.console.log("outside");
+-  findLogEntry("outside");
+-  let msg = outputNode.querySelectorAll(".webconsole-msg-icon-container");
++
++  content.console.groupEnd("bug664131a");
++  content.console.log("bug664131-outside");
++
++  waitForSuccess({
++    name: "console.log message displayed after groupEnd()",
++    validatorFn: function _validator()
++    {
++      return outputNode.textContent.indexOf("bug664131-outside") > -1;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
++
++  msg = outputNode.querySelectorAll(".webconsole-msg-icon-container");
+   is(msg.length, 3, "three message nodes displayed");
+   is(msg[2].style.marginLeft, "0px", "correct group indent found");
+-  content.console.groupCollapsed("b");
+-  findLogEntry("b");
+-  let msg = outputNode.querySelectorAll(".webconsole-msg-icon-container");
++
++  content.console.groupCollapsed("bug664131b");
++
++  waitForSuccess({
++    name: "console.groupCollapsed displayed",
++    validatorFn: function _validator()
++    {
++      return outputNode.textContent.indexOf("bug664131b") > -1;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
++
++  msg = outputNode.querySelectorAll(".webconsole-msg-icon-container");
+   is(msg.length, 4, "four message nodes displayed");
+   is(msg[3].style.marginLeft, GROUP_INDENT + "px", "correct group indent found");
+ 
+   // Test that clearing the console removes the indentation.
+   hud.jsterm.clearOutput();
+-  content.console.log("cleared");
+-  findLogEntry("cleared");
+-  let msg = outputNode.querySelectorAll(".webconsole-msg-icon-container");
++  content.console.log("bug664131-cleared");
++
++  waitForSuccess({
++    name: "console.log displayed after clearOutput",
++    validatorFn: function _validator()
++    {
++      return outputNode.textContent.indexOf("bug664131-cleared") > -1;
++    },
++    successFn: testNext,
++    failureFn: finishTest,
++  });
++
++  yield;
++
++  msg = outputNode.querySelectorAll(".webconsole-msg-icon-container");
+   is(msg.length, 1, "one message node displayed");
+   is(msg[0].style.marginLeft, "0px", "correct group indent found");
+ 
+   finishTest();
++  yield;
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_extras.js b/browser/devtools/webconsole/test/browser_webconsole_console_extras.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_console_extras.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_console_extras.js
+@@ -36,30 +36,36 @@
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that the basic console.log()-style APIs and filtering work.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console-extras.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", onLoad, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(consoleOpened);
++  }, true);
+ }
+ 
+-function onLoad() {
+-  browser.removeEventListener("DOMContentLoaded", onLoad, false);
+-  let doc = content.document;
+-  openConsole();
+-  let button = doc.querySelector("button");
++function consoleOpened(hud) {
++  waitForSuccess({
++    name: "two nodes displayed",
++    validatorFn: function _validator()
++    {
++      return hud.outputNode.querySelectorAll(".hud-msg-node").length == 2;
++    },
++    successFn: function _success()
++    {
++      let nodes = hud.outputNode.querySelectorAll(".hud-msg-node");
++      ok(/start/.test(nodes[0].textContent), "start found");
++      ok(/end/.test(nodes[1].textContent), "end found - complete!");
++
++      finishTest();
++    },
++    failureFn: finishTest,
++  });
++
++  let button = content.document.querySelector("button");
+   ok(button, "we have the button");
+   EventUtils.sendMouseEvent({ type: "click" }, button, content);
+-  executeSoon(testButtonClicked);
+ }
+-
+-function testButtonClicked()
+-{
+-  let outputNode = HUDService.getHudByWindow(content).outputNode;
+-  let nodes = outputNode.querySelectorAll(".hud-msg-node");
+-  is(nodes.length, 2, "two nodes");
+-  ok(/start/.test(nodes[0].textContent), "start found");
+-  ok(/end/.test(nodes[1].textContent), "end found - complete!");
+-  finishTest();
+-}
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js b/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
@@ -3991,7 +5499,49 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_logging
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js b/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js
-@@ -44,17 +44,18 @@ function testNewlines() {
+@@ -19,42 +19,50 @@ registerCleanupFunction(function() {
+ function test()
+ {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab(TEST_URI);
+   browser.addEventListener("DOMContentLoaded", onLoad, false);
+ }
+ 
+ function onLoad() {
+-  browser.removeEventListener("DOMContentLoaded", onLoad,
+-                                               false);
+-  executeSoon(testNewlines);
++  browser.removeEventListener("DOMContentLoaded", onLoad, false);
++  openConsole(testNewlines);
+ }
+ 
+-function testNewlines() {
+-  openConsole();
+-  hud = HUDService.getHudByWindow(content);
++function testNewlines(aHud) {
++  hud = aHud;
+   hud.jsterm.clearOutput();
+ 
+-  let console = content.wrappedJSObject.console;
+-  ok(console != null, "we have the console object");
+-
+   for (let i = 0; i < 20; i++) {
+-    console.log("Hello world!");
++    content.console.log("Hello world #" + i);
+   }
+ 
++  waitForSuccess({
++    name: "20 console.log messages displayed",
++    validatorFn: function()
++    {
++      return hud.outputNode.itemCount == 20;
++    },
++    successFn: testClipboard,
++    failureFn: finishTest,
++  });
++}
++
++function testClipboard() {
    let outputNode = hud.outputNode;
  
    outputNode.selectAll();
@@ -4011,6 +5561,231 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_copying_multipl
                     finishTest, finishTest);
  }
  
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_live_filtering_of_message_types.js b/browser/devtools/webconsole/test/browser_webconsole_live_filtering_of_message_types.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_live_filtering_of_message_types.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_live_filtering_of_message_types.js
+@@ -39,33 +39,44 @@
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that the message type filter checkboxes work.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded",
+-                              testLiveFilteringOfMessageTypes, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(consoleOpened);
++  }, true);
++}
++
++function consoleOpened(aHud) {
++  hud = aHud;
++  hud.jsterm.clearOutput();
++
++  let console = content.console;
++
++  for (let i = 0; i < 50; i++) {
++    console.log("http://www.example.com/" + i);
++  }
++
++  waitForSuccess({
++    name: "50 console.log messages displayed",
++    validatorFn: function()
++    {
++      return hud.outputNode.itemCount == 50;
++    },
++    successFn: testLiveFilteringOfMessageTypes,
++    failureFn: finishTest,
++  });
+ }
+ 
+ function testLiveFilteringOfMessageTypes() {
+-  browser.removeEventListener("DOMContentLoaded",
+-                              testLiveFilteringOfMessageTypes, false);
+-
+-  openConsole();
+-
+-  hud = HUDService.getHudByWindow(content);
+-  let console = browser.contentWindow.wrappedJSObject.console;
+-
+-  for (let i = 0; i < 50; i++) {
+-    console.log("http://www.example.com/");
+-  }
+-
+   HUDService.setFilterState(hud.hudId, "log", false);
+   is(countMessageNodes(), 0, "the log nodes are hidden when the " +
+     "corresponding filter is switched off");
+ 
+   HUDService.setFilterState(hud.hudId, "log", true);
+   isnot(countMessageNodes(), 0, "the log nodes reappear when the " +
+     "corresponding filter is switched on");
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_live_filtering_on_search_strings.js b/browser/devtools/webconsole/test/browser_webconsole_live_filtering_on_search_strings.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_live_filtering_on_search_strings.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_live_filtering_on_search_strings.js
+@@ -37,35 +37,47 @@
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that the text filter box works.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
++let hud;
++
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded",
+-                           testLiveFilteringOnSearchStrings, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(consoleOpened);
++  }, true);
++}
++
++function consoleOpened(aHud) {
++  hud = aHud;
++  hud.jsterm.clearOutput();
++  let console = content.console;
++
++  for (let i = 0; i < 50; i++) {
++    console.log("http://www.example.com/ " + i);
++  }
++
++  waitForSuccess({
++    name: "50 console.log messages displayed",
++    validatorFn: function()
++    {
++      return hud.outputNode.itemCount == 50;
++    },
++    successFn: testLiveFilteringOnSearchStrings,
++    failureFn: finishTest,
++  });
+ }
+ 
+ function testLiveFilteringOnSearchStrings() {
+-  browser.removeEventListener("DOMContentLoaded",
+-                              testLiveFilteringOnSearchStrings, false);
+-
+-  openConsole();
+-
+-  hud = HUDService.getHudByWindow(content);
+-  let console = browser.contentWindow.wrappedJSObject.console;
+-
+-  for (let i = 0; i < 50; i++) {
+-    console.log("http://www.example.com/");
+-  }
+-
+   setStringFilter("http");
+   isnot(countMessageNodes(), 0, "the log nodes are not hidden when the " +
+     "search string is set to \"http\"");
+ 
+   setStringFilter("hxxp");
+   is(countMessageNodes(), 0, "the log nodes are hidden when the search " +
+     "string is set to \"hxxp\"");
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_log_node_classes.js b/browser/devtools/webconsole/test/browser_webconsole_log_node_classes.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_log_node_classes.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_log_node_classes.js
+@@ -40,36 +40,45 @@
+ 
+ // Tests that console logging via the console API produces nodes of the correct
+ // CSS classes.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testLogNodeClasses, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(consoleOpened);
++  }, true);
+ }
+ 
+-function testLogNodeClasses() {
+-  browser.removeEventListener("DOMContentLoaded", testLogNodeClasses,
+-                              false);
+-
+-  openConsole();
+-
+-  let console = browser.contentWindow.wrappedJSObject.console;
+-  let outputNode = HUDService.getHudByWindow(content).outputNode;
++function consoleOpened(aHud) {
++  let console = content.console;
++  outputNode = aHud.outputNode;
+ 
+   ok(console, "console exists");
+   console.log("I am a log message");
+   console.error("I am an error");
+   console.info("I am an info message");
+   console.warn("I am a warning  message");
+ 
+-  let domLogEntries =
+-    outputNode.childNodes;
++  waitForSuccess({
++    name: "console.warn displayed",
++    validatorFn: function()
++    {
++      return aHud.outputNode.textContent.indexOf("a warning") > -1;
++    },
++    successFn: testLogNodeClasses,
++    failureFn: finishTest,
++  });
++}
++
++function testLogNodeClasses() {
++  let domLogEntries = outputNode.childNodes;
+ 
+   let count = outputNode.childNodes.length;
+   ok(count > 0, "LogCount: " + count);
+ 
+   let klasses = ["hud-log",
+                  "hud-warn",
+                  "hud-info",
+                  "hud-error",
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_message_node_id.js b/browser/devtools/webconsole/test/browser_webconsole_message_node_id.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_message_node_id.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_message_node_id.js
+@@ -39,21 +39,23 @@ const TEST_URI = "http://example.com/bro
+ 
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("DOMContentLoaded", onLoad, false);
+ }
+ 
+ function onLoad() {
+   browser.removeEventListener("DOMContentLoaded", onLoad, false);
+-  openConsole();
++  openConsole(function(hud) {
++    content.console.log("a log message");
+ 
+-  let console = content.wrappedJSObject.console;
+-  let outputNode = HUDService.getHudByWindow(content).outputNode;
+-
+-  console.log("a log message");
+-
+-  let node = outputNode.querySelectorAll(".hud-msg-node");
+-
+-  ok(node[0].getAttribute("id") && node[0].getAttribute != "", "we have a node id");
+-  closeConsole();
+-  finishTest();
++    waitForSuccess({
++      name: "console.log message shown with an ID attribute",
++      validatorFn: function _validator()
++      {
++        let node = hud.outputNode.querySelector(".hud-msg-node");
++        return node && node.getAttribute("id");
++      },
++      successFn: finishTest,
++      failureFn: finishTest,
++    });
++  });
+ }
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
@@ -4058,6 +5833,74 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    // This test disabled. See bug 603620.
  
    // Test if the NetworkPanel figures out the content type based on an URL as
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_order.js b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_order.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
+@@ -45,39 +45,46 @@ const TEST_URI = "http://example.com/bro
+ 
+ registerCleanupFunction(function() {
+   Services.prefs.clearUserPref("devtools.gcli.enable");
+ });
+ 
+ function test() {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testOutputOrder, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(testOutputOrder);
++  }, true);
+ }
+ 
+-function testOutputOrder() {
+-  browser.removeEventListener("DOMContentLoaded", testOutputOrder, false);
+-
+-  openConsole();
+-
+-  let jsterm = HUDService.getHudByWindow(content).jsterm;
++function testOutputOrder(hud) {
++  let jsterm = hud.jsterm;
+   let outputNode = jsterm.outputNode;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("console.log('foo', 'bar');");
+ 
+-  let nodes = outputNode.querySelectorAll(".hud-msg-node");
+-  is(nodes.length, 3, "3 children in output");
++  waitForSuccess({
++    name: "console.log message displayed",
++    validatorFn: function()
++    {
++      return outputNode.querySelectorAll(".hud-msg-node").length == 3;
++    },
++    successFn: function()
++    {
++      let nodes = outputNode.querySelectorAll(".hud-msg-node");
+ 
+-  let executedStringFirst =
+-    /console\.log\('foo', 'bar'\);/.test(nodes[0].textContent);
++      let executedStringFirst =
++        /console\.log\('foo', 'bar'\);/.test(nodes[0].textContent);
+ 
+-  let outputSecond =
+-    /foo bar/.test(nodes[1].textContent);
++      let outputSecond = /foo bar/.test(nodes[2].textContent);
+ 
+-  ok(executedStringFirst && outputSecond, "executed string comes first");
++      ok(executedStringFirst && outputSecond, "executed string comes first");
+ 
+-  jsterm.clearOutput();
+-  jsterm.history.splice(0, jsterm.history.length);   // workaround for bug 592552
++      jsterm.clearOutput();
++      jsterm.history.splice(0, jsterm.history.length);   // workaround for bug 592552
+ 
+-  finishTest();
++      finishTest();
++    },
++    failureFn: finishTest,
++  });
+ }
+-
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_registries.js b/browser/devtools/webconsole/test/browser_webconsole_registries.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_registries.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_registries.js
@@ -4117,7 +5960,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +      Services.obs.removeObserver(onWebConsoleOpen, "web-console-created");
 +      aSubject.QueryInterface(Ci.nsISupportsString);
 +      let hud = HUDService.getHudReferenceById(aSubject.data);
-+      aCallback(hud);
++      executeSoon(aCallback.bind(null, hud));
 +    }
 +  }
 +
