@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent 51fe735d19a90aef55fe0cf8661f159b650e4cb1
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1334244401 -10800
+# Date 1334247810 -10800
 
 Bug 673148 - (async-webconsole) Part 1 - Make console API async
 
@@ -3042,7 +3042,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanelAsync.jsm b/browser/devtoo
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/PropertyPanelAsync.jsm
-@@ -0,0 +1,446 @@
+@@ -0,0 +1,492 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -3129,8 +3129,36 @@ new file mode 100644
 +   * Use this setter to update the content of the tree.
 +   *
 +   * @param object aObject
-+   *        The new object to be displayed in the tree.
-+   * @returns void
++   *        An object that holds information about the object you want to
++   *        display in the property panel. Object properties:
++   *        - object:
++   *        This is the raw object you want to display. You can only provide
++   *        this object if you want the property panel to work in sync mode.
++   *        - remoteObject:
++   *        An array that holds information on the remote object being
++   *        inspected. Each element in this array describes each property in the
++   *        remote object. See WebConsoleUtils.namesAndValuesOf() for details.
++   *        - rootCacheId:
++   *        The cache ID where the objects referenced in remoteObject are found.
++   *        - panelCacheId:
++   *        The cache ID where any object retrieved by this property panel
++   *        instance should be stored into.
++   *        - remoteObjectProvider:
++   *        A function that is invoked when a new object is needed. This is
++   *        called when the user tries to expand an inspectable property. The
++   *        callback must take four arguments:
++   *          - fromCacheId:
++   *          Tells from where to retrieve the object the user picked (from
++   *          which cache ID).
++   *          - objectId:
++   *          The object ID the user wants.
++   *          - panelCacheId:
++   *          Tells in which cache ID to store the objects referenced by
++   *          objectId so they can be retrieved later.
++   *          - callback:
++   *          The callback function to be invoked when the remote object is
++   *          received. This function takes one argument: the raw message
++   *          received from the Web Console content script.
 +   */
 +  set data(aData) {
 +    let oldLen = this._rows.length;
@@ -3149,7 +3177,7 @@ new file mode 100644
 +      this._updateRemoteObject(this._rows, 0);
 +    }
 +    else if (aData.object) {
-+      this._rows = this._inspectObject(aData.object, 0);
++      this._rows = this._inspectObject(aData.object);
 +    }
 +    else {
 +      throw new Error("First argument must have a .remoteObject or " +
@@ -3167,18 +3195,15 @@ new file mode 100644
 +  },
 +
 +  /**
-+   * Generates the child items for the treeView of a given aItem. If there is
-+   * already a children property on the aItem, this cached one is returned.
++   * Update a remote object so it can be used with the tree view. This method
++   * adds properties to each array element.
 +   *
-+   * @param object aItem
-+   *        An item of the tree's elements to generate the children for.
-+   * @param boolean aRootElement
-+   *        If set, aItem is handled as an JS object and not as an item
-+   *        element of the tree.
-+   * @returns array of objects
-+   *        Child items of aItem.
++   * @private
++   * @param array aObject
++   *        The remote object you want prepared for use with the tree view.
++   * @param number aLevel
++   *        The level you want to give to each property in the remote object.
 +   */
-+  // TODO: update comment
 +  _updateRemoteObject: function PTV__updateRemoteObject(aObject, aLevel)
 +  {
 +    aObject.forEach(function(aElement) {
@@ -3188,15 +3213,37 @@ new file mode 100644
 +    });
 +  },
 +
-+  _inspectObject: function PTV__inspectObject(aObject, aLevel)
++  /**
++   * Inspect a local object.
++   *
++   * @private
++   * @param object aObject
++   *        The object you want to inspect.
++   */
++  _inspectObject: function PTV__inspectObject(aObject)
 +  {
 +    this._objectCache = {};
 +    this._remoteObjectProvider = this._localObjectProvider.bind(this);
 +    let children = WebConsoleUtils.namesAndValuesOf(aObject, this._objectCache);
-+    this._updateRemoteObject(children, aLevel);
++    this._updateRemoteObject(children, 0);
 +    return children;
 +  },
 +
++  /**
++   * An object provider for when the user inspects local objects (not remote
++   * ones).
++   *
++   * @private
++   * @param string aFromCacheId
++   *        The cache ID from where to retrieve the desired object.
++   * @param string aObjectId
++   *        The ID of the object you want.
++   * @param string aDestCacheId
++   *        The ID of the cache where to store any objects referenced by the
++   *        desired object.
++   * @param function aCallback
++   *        The function you want to receive the object.
++   */
 +  _localObjectProvider:
 +  function PTV__localObjectProvider(aFromCacheId, aObjectId, aDestCacheId,
 +                                    aCallback)
@@ -3392,16 +3439,17 @@ new file mode 100644
 +/**
 + * Creates a new PropertyPanel.
 + *
++ * @see PropertyTreeView
 + * @param nsIDOMNode aParent
 + *        Parent node to append the created panel to.
 + * @param string aTitle
 + *        Title for the panel.
 + * @param string aObject
-+ *        Object to display in the tree.
++ *        Object to display in the tree. For details about this object please
++ *        see the PropertyTreeView constructor in this file.
 + * @param array of objects aButtons
 + *        Array with buttons to display at the bottom of the panel.
 + */
-+// TODO: update the comment
 +function PropertyPanel(aParent, aTitle, aObject, aButtons)
 +{
 +  let document = aParent.ownerDocument;
@@ -3475,10 +3523,8 @@ new file mode 100644
 +}
 +
 +/**
-+ * Destroy the PropertyPanel. This closes the poped up panel and removes
-+ * it from the browser DOM.
-+ *
-+ * @returns void
++ * Destroy the PropertyPanel. This closes the panel and removes it from the
++ * browser DOM.
 + */
 +PropertyPanel.prototype.destroy = function PP_destroy()
 +{
