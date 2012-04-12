@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent 51fe735d19a90aef55fe0cf8661f159b650e4cb1
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1334247810 -10800
+# Date 1334248339 -10800
 
 Bug 673148 - (async-webconsole) Part 1 - Make console API async
 
@@ -4287,7 +4287,7 @@ new file mode 100644
 diff --git a/browser/devtools/webconsole/test/browser_cached_messages.js b/browser/devtools/webconsole/test/browser_cached_messages.js
 --- a/browser/devtools/webconsole/test/browser_cached_messages.js
 +++ b/browser/devtools/webconsole/test/browser_cached_messages.js
-@@ -39,45 +39,42 @@
+@@ -39,45 +39,43 @@
  const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-webconsole-error-observer.html";
  
  function test()
@@ -4346,7 +4346,8 @@ diff --git a/browser/devtools/webconsole/test/browser_cached_messages.js b/brows
 +    if (aTestReopen) {
 +      HUDService.deactivateHUDForContext(gBrowser.selectedTab);
 +      executeSoon(testOpenUI);
-+    } else {
++    }
++    else {
 +      executeSoon(finish);
 +    }
 +  });
@@ -6718,7 +6719,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
    HUDService.deactivateHUDForContext(tab);
  }
  
-@@ -181,8 +204,53 @@ function tearDown()
+@@ -181,8 +204,54 @@ function tearDown()
    }
    tab = browser = hudId = hud = filterBox = outputNode = cs = null;
  }
@@ -6765,7 +6766,8 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +    if (validatorFn(aOptions)) {
 +      ok(true, aOptions.name);
 +      successFn();
-+    } else {
++    }
++    else {
 +      setTimeout(function() wait(validatorFn, successFn, failureFn), 100);
 +    }
 +  }
