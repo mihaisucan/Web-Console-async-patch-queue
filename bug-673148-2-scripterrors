@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent 803d11800f2645349bfa585e94fc0c50bcb9810e
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1334262526 -10800
+# Date 1334328229 -10800
 
 Bug 673148 - (async-webconsole) Part 2 - Make script and style errors async
 
@@ -267,7 +267,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -1881,17 +1881,16 @@ HUD_SERVICE.prototype =
+@@ -1881,18 +1881,16 @@ HUD_SERVICE.prototype =
      if (Object.keys(this.hudReferences).length > 0) {
        return;
      }
@@ -277,7 +277,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      HUDWindowObserver.init();
 -    HUDConsoleObserver.init();
-     ConsoleAPIObserver.init();
+-    ConsoleAPIObserver.init();
    },
  
    /**
@@ -285,7 +285,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * closed.
     *
     * @returns void
-@@ -1907,17 +1906,16 @@ HUD_SERVICE.prototype =
+    */
+@@ -1907,18 +1905,16 @@ HUD_SERVICE.prototype =
      this.openRequests = {};
      this.openResponseHeaders = {};
  
@@ -295,7 +296,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      HUDWindowObserver.uninit();
 -    HUDConsoleObserver.uninit();
-     ConsoleAPIObserver.shutdown();
+-    ConsoleAPIObserver.shutdown();
    },
  
    /**
@@ -303,7 +304,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @returns void
     */
-@@ -2015,83 +2013,16 @@ HUD_SERVICE.prototype =
+   shutdown: function HS_shutdown()
+@@ -2015,83 +2011,16 @@ HUD_SERVICE.prototype =
      let message = stringBundle.GetStringFromName("ConsoleAPIDisabled");
      let node = ConsoleUtils.createMessageNode(chromeDocument, CATEGORY_JS,
                                                SEVERITY_WARNING, message,
@@ -387,7 +389,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    function HS_registerApplications(aAppName, aHooksObject)
    {
      switch(aAppName) {
-@@ -3057,17 +2988,17 @@ HeadsUpDisplay.prototype = {
+@@ -3057,17 +2986,17 @@ HeadsUpDisplay.prototype = {
    /**
     * Message names that the HUD listens for. These messages come from the remote
     * Web Console content script.
@@ -406,7 +408,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    groupDepth: 0,
  
-@@ -3401,52 +3332,40 @@ HeadsUpDisplay.prototype = {
+@@ -3401,52 +3330,40 @@ HeadsUpDisplay.prototype = {
        throw new Error("Unsupported Gecko Application");
      }
    },
@@ -474,7 +476,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Scroll to bottom.
      let numChildren = this.outputNode.childNodes.length;
-@@ -4098,16 +4017,74 @@ HeadsUpDisplay.prototype = {
+@@ -4098,16 +4015,74 @@ HeadsUpDisplay.prototype = {
        tree.view = node.propertyTreeView;
  
        // Make sure the cached evaluated object will be purged when the node is
@@ -549,7 +551,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Setup the message manager used to communicate with the Web Console content
-@@ -4121,18 +4098,18 @@ HeadsUpDisplay.prototype = {
+@@ -4121,18 +4096,18 @@ HeadsUpDisplay.prototype = {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
      this._messageListeners.forEach(function(aName) {
@@ -570,7 +572,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Handler for all of the messages coming from the Web Console content script.
     *
     * @private
-@@ -4149,18 +4126,21 @@ HeadsUpDisplay.prototype = {
+@@ -4149,18 +4124,21 @@ HeadsUpDisplay.prototype = {
  
      switch (aMessage.name) {
        case "JSTerm:EvalObject":
@@ -593,7 +595,98 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Callback method for when the Web Console initialization is complete. For
     * now this method sends the web-console-created notification using the
-@@ -6619,54 +6599,16 @@ CommandController.prototype = {
+@@ -4302,43 +4280,16 @@ HeadsUpDisplay.prototype = {
+     this.positionMenuitems.window.removeEventListener("command",
+       this._positionConsoleWindow, false);
+ 
+     this.closeButton.removeEventListener("command",
+       this.closeButtonOnCommand, false);
+   },
+ };
+ 
+-
+-//////////////////////////////////////////////////////////////////////////////
+-// ConsoleAPIObserver
+-//////////////////////////////////////////////////////////////////////////////
+-
+-let ConsoleAPIObserver = {
+-
+-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+-
+-  init: function CAO_init()
+-  {
+-    Services.obs.addObserver(this, "quit-application-granted", false);
+-  },
+-
+-  observe: function CAO_observe(aMessage, aTopic, aData)
+-  {
+-    if (aTopic == "quit-application-granted") {
+-      HUDService.shutdown();
+-    }
+-  },
+-
+-  shutdown: function CAO_shutdown()
+-  {
+-    Services.obs.removeObserver(this, "quit-application-granted");
+-  }
+-};
+-
+ /**
+  * Creates a DOM Node factory for XUL nodes - as well as textNodes
+  * @param aFactoryType "xul" or "text"
+  * @param ignored This parameter is currently ignored, and will be removed
+  * See bug 594304
+  * @param aDocument The document, the factory is to generate nodes from
+  * @return DOM Node Factory function
+  */
+@@ -6500,41 +6451,38 @@ ConsoleEntry.prototype = {
+   }
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // HUDWindowObserver
+ //////////////////////////////////////////////////////////////////////////
+ 
+ HUDWindowObserver = {
+-  QueryInterface: XPCOMUtils.generateQI(
+-    [Ci.nsIObserver,]
+-  ),
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+ 
+   init: function HWO_init()
+   {
+-    Services.obs.addObserver(this, "xpcom-shutdown", false);
+     Services.obs.addObserver(this, "content-document-global-created", false);
++    Services.obs.addObserver(this, "quit-application-granted", false);
+   },
+ 
+   observe: function HWO_observe(aSubject, aTopic, aData)
+   {
+     if (aTopic == "content-document-global-created") {
+       HUDService.windowInitializer(aSubject);
+     }
+-    else if (aTopic == "xpcom-shutdown") {
+-      this.uninit();
++    else if (aTopic == "quit-application-granted") {
++      HUDService.shutdown();
+     }
+   },
+ 
+   uninit: function HWO_uninit()
+   {
+     Services.obs.removeObserver(this, "content-document-global-created");
+-    Services.obs.removeObserver(this, "xpcom-shutdown");
+-    this.initialConsoleCreated = false;
++    Services.obs.removeObserver(this, "quit-application-granted");
+   },
+ 
+ };
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+ // CommandController
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+@@ -6619,54 +6567,16 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
@@ -648,3 +741,658 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * @param string aHudId
   *        The HeadsUpDisplay ID.
   */
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_580030_errors_after_page_reload.js b/browser/devtools/webconsole/test/browser_webconsole_bug_580030_errors_after_page_reload.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_580030_errors_after_page_reload.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_580030_errors_after_page_reload.js
+@@ -46,43 +46,36 @@ function test() {
+   expectUncaughtException();
+   addTab(TEST_URI);
+   browser.addEventListener("load", onLoad, true);
+ }
+ 
+ // see bug 580030: the error handler fails silently after page reload.
+ // https://bugzilla.mozilla.org/show_bug.cgi?id=580030
+ function onLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++  browser.removeEventListener(aEvent.type, onLoad, true);
+ 
+-  openConsole();
+-
+-  browser.addEventListener("load", testErrorsAfterPageReload, true);
+-  executeSoon(function() {
++  openConsole(function(hud) {
++    hud.jsterm.clearOutput();
++    browser.addEventListener("load", testErrorsAfterPageReload, true);
+     content.location.reload();
+   });
+ }
+ 
+ function testErrorsAfterPageReload(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++  browser.removeEventListener(aEvent.type, testErrorsAfterPageReload, true);
+ 
+   // dispatch a click event to the button in the test page and listen for
+   // errors.
+ 
+   Services.console.registerListener(consoleObserver);
+ 
+-  var button = content.document.querySelector("button").wrappedJSObject;
+-  var clickEvent = content.document.createEvent("MouseEvents");
+-  clickEvent.initMouseEvent("click", true, true,
+-    content, 0, 0, 0, 0, 0, false, false,
+-    false, false, 0, null);
+-
+-  executeSoon(function() {
+-    button.dispatchEvent(clickEvent);
+-  });
++  let button = content.document.querySelector("button").wrappedJSObject;
++  ok(button, "button found");
++  EventUtils.sendMouseEvent({type: "click"}, button, content);
+ }
+ 
+ var consoleObserver = {
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+ 
+   observe: function test_observe(aMessage)
+   {
+     // Ignore errors we don't care about.
+@@ -90,16 +83,20 @@ var consoleObserver = {
+       aMessage.category != "content javascript") {
+       return;
+     }
+ 
+     Services.console.unregisterListener(this);
+ 
+     let outputNode = HUDService.getHudByWindow(content).outputNode;
+ 
+-    executeSoon(function() {
+-      let msg = "Found the error message after page reload";
+-      testLogEntry(outputNode, "fooBazBaz", msg);
+-      finishTest();
++    waitForSuccess({
++      name: "error message after page reload",
++      validatorFn: function()
++      {
++        return outputNode.textContent.indexOf("fooBazBaz") > -1;
++      },
++      successFn: finishTest,
++      failureFn: finishTest,
+     });
+   }
+ };
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js b/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js
+@@ -77,23 +77,32 @@ var consoleObserver = {
+       aMessage.category != "content javascript") {
+       return;
+     }
+ 
+     Services.console.unregisterListener(this);
+ 
+     outputNode = HUDService.getHudByWindow(content).outputNode;
+ 
+-    executeSoon(function () {
+-      var text = outputNode.textContent;
+-      var error1pos = text.indexOf("fooDuplicateError1");
+-      ok(error1pos > -1, "found fooDuplicateError1");
+-      if (error1pos > -1) {
+-        ok(text.indexOf("fooDuplicateError1", error1pos + 1) == -1,
+-          "no duplicate for fooDuplicateError1");
+-      }
++    waitForSuccess({
++      name: "fooDuplicateError1 error displayed",
++      validatorFn: function()
++      {
++        return outputNode.textContent.indexOf("fooDuplicateError1") > -1;
++      },
++      successFn: function()
++      {
++        let text = outputNode.textContent;
++        let error1pos = text.indexOf("fooDuplicateError1");
++        ok(error1pos > -1, "found fooDuplicateError1");
++        if (error1pos > -1) {
++          ok(text.indexOf("fooDuplicateError1", error1pos + 1) == -1,
++            "no duplicate for fooDuplicateError1");
++        }
+ 
+-      findLogEntry("test-duplicate-error.html");
++        findLogEntry("test-duplicate-error.html");
+ 
+-      finishTest();
++        finishTest();
++      },
++      failureFn: finishTest,
+     });
+   }
+ };
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_597136_external_script_errors.js b/browser/devtools/webconsole/test/browser_webconsole_bug_597136_external_script_errors.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_597136_external_script_errors.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_597136_external_script_errors.js
+@@ -16,30 +16,24 @@ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", tabLoaded, true);
+ }
+ 
+ function tabLoaded(aEvent) {
+   browser.removeEventListener("load", tabLoaded, true);
+   openConsole();
+ 
+-  browser.addEventListener("load", contentLoaded, true);
+-  content.location.reload();
+-}
++  let button = content.document.querySelector("button");
++  let outputNode = HUDService.getHudByWindow(content).outputNode;
+ 
+-function contentLoaded(aEvent) {
+-  browser.removeEventListener("load", contentLoaded, true);
+-
+-  let button = content.document.querySelector("button");
+   expectUncaughtException();
+   EventUtils.sendMouseEvent({ type: "click" }, button, content);
+-  executeSoon(buttonClicked);
++
++  waitForSuccess({
++    name: "external script error message",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf("bogus is not defined") > -1;
++    },
++    successFn: finishTest,
++    failureFn: finishTest,
++  });
+ }
+-
+-function buttonClicked() {
+-  let outputNode = HUDService.getHudByWindow(content).outputNode;
+-
+-  let msg = "the error from the external script was logged";
+-  testLogEntry(outputNode, "bogus", msg);
+-
+-  finishTest();
+-}
+-
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js b/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js
+@@ -36,38 +36,43 @@ let TestObserver = {
+     }
+     else {
+       lastWindowId = aSubject.outerWindowID;
+     }
+   }
+ };
+ 
+ function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++  browser.removeEventListener(aEvent.type, tabLoad, true);
+ 
+   openConsole();
+ 
+   let hudId = HUDService.getHudIdByWindow(content);
+   hud = HUDService.hudReferences[hudId];
+ 
+   Services.console.registerListener(TestObserver);
+ 
+   content.location = TEST_URI;
+ }
+ 
+ function performTest() {
+-  let textContent = hud.outputNode.textContent;
+-  isnot(textContent.indexOf("ws://0.0.0.0:81"), -1,
+-        "first error message found");
+-  isnot(textContent.indexOf("ws://0.0.0.0:82"), -1,
+-        "second error message found");
+-
+   Services.console.unregisterListener(TestObserver);
+   Services.prefs.setBoolPref(pref_ws, oldPref_ws);
+-  finishTest();
++
++  waitForSuccess({
++    name: "websocket error messages displayed",
++    validatorFn: function()
++    {
++      let textContent = hud.outputNode.textContent;
++      return textContent.indexOf("ws://0.0.0.0:81") > -1 &&
++             textContent.indexOf("ws://0.0.0.0:82") > -1;
++    },
++    successFn: finishTest,
++    failureFn: finishTest,
++  });
+ }
+ 
+ function test() {
+   oldPref_ws = Services.prefs.getBoolPref(pref_ws);
+ 
+   Services.prefs.setBoolPref(pref_ws, true);
+ 
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 603750: Web Socket errors");
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js b/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
+@@ -2,36 +2,58 @@
+ /* Any copyright is dedicated to the Public Domain.
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ const TEST_URI = 'data:text/html;charset=utf-8,<div style="-moz-opacity:0;">test repeated' +
+                  ' css warnings</div><p style="-moz-opacity:0">hi</p>';
+ 
+ function onContentLoaded()
+ {
+-  browser.removeEventListener("load", arguments.callee, true);
++  browser.removeEventListener("load", onContentLoaded, true);
+ 
+   let HUD = HUDService.getHudByWindow(content);
+   let jsterm = HUD.jsterm;
+   let outputNode = HUD.outputNode;
+ 
+-  let msg = "The unknown CSS property warning is displayed only once";
+-  let node = outputNode.firstChild;
++  let cssWarning = "Unknown property '-moz-opacity'.  Declaration dropped.";
+ 
+-  is(node.childNodes[2].textContent, "Unknown property '-moz-opacity'.  Declaration dropped.", "correct node")
+-  is(node.childNodes[3].firstChild.getAttribute("value"), 2, msg);
++  waitForSuccess({
++    name: "2 repeated CSS warnings",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf(cssWarning) > -1;
++    },
++    successFn: function()
++    {
++      let msg = "The unknown CSS property warning is displayed only once";
++      let node = outputNode.firstChild;
++
++      is(node.childNodes[2].textContent, cssWarning, "correct node");
++      is(node.childNodes[3].firstChild.getAttribute("value"), 2, msg);
++
++      testConsoleLogRepeats();
++    },
++    failureFn: finishTest,
++  });
++}
++
++function testConsoleLogRepeats()
++{
++  let HUD = HUDService.getHudByWindow(content);
++  let jsterm = HUD.jsterm;
++  let outputNode = HUD.outputNode;
+ 
+   jsterm.clearOutput();
+ 
+   jsterm.setInputValue("for (let i = 0; i < 10; ++i) console.log('this is a line of reasonably long text that I will use to verify that the repeated text node is of an appropriate size.');");
+   jsterm.execute();
+ 
+   waitForSuccess({
+     name: "10 repeated console.log messages",
+-    validatorFn: function _validator()
++    validatorFn: function()
+     {
+       let node = outputNode.querySelector(".webconsole-msg-console");
+       return node && node.childNodes[3].firstChild.getAttribute("value") == 10;
+     },
+     successFn: finishTest,
+     failureFn: finishTest,
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618078_network_exceptions.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618078_network_exceptions.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_618078_network_exceptions.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618078_network_exceptions.js
+@@ -52,51 +52,54 @@ let TestObserver = {
+     }
+ 
+     is(aSubject.category, "content javascript", "error category");
+ 
+     if (aSubject.category == "content javascript") {
+       executeSoon(checkOutput);
+     }
+     else {
+-      testEnd();
++      finish();
+     }
+   }
+ };
+ 
+ function checkOutput()
+ {
+   if (testEnded) {
+     return;
+   }
+ 
+-  let textContent = hud.outputNode.textContent;
+-  isnot(textContent.indexOf("bug618078exception"), -1,
+-        "exception message");
+-
+-  testEnd();
++  waitForSuccess({
++    name: "exception message",
++    validatorFn: function()
++    {
++      return hud.outputNode.textContent.indexOf("bug618078exception") > -1;
++    },
++    successFn: finish,
++    failureFn: finish,
++  });
+ }
+ 
+ function testEnd()
+ {
+   if (testEnded) {
+     return;
+   }
+ 
+   testEnded = true;
+   Services.console.unregisterListener(TestObserver);
+-  finishTest();
+ }
+ 
+ function test()
+ {
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 618078");
+ 
+-  browser.addEventListener("load", function() {
+-    browser.removeEventListener("load", arguments.callee, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
+ 
+     openConsole();
+ 
+     let hudId = HUDService.getHudIdByWindow(content);
+     hud = HUDService.hudReferences[hudId];
+ 
+     Services.console.registerListener(TestObserver);
+     registerCleanupFunction(testEnd);
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js b/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
+@@ -5,53 +5,61 @@
+  */
+ 
+ // Tests that the Web Console limits the number of lines displayed according to
+ // the limit set for each category.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/" +
+                  "webconsole/test/test-bug-644419-log-limits.html";
+ 
+-var gOldPref, gHudId;
++var gOldPref;
+ 
+ registerCleanupFunction(function() {
+   Services.prefs.clearUserPref("devtools.gcli.enable");
+ });
+ 
+ function test() {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 644419: Console should " +
+          "have user-settable log limits for each message category");
+   browser.addEventListener("load", onLoad, true);
+ }
+ 
+ function onLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++  browser.removeEventListener(aEvent.type, onLoad, true);
+ 
+   openConsole(function(aHud) {
+-    gHudId = aHud.hudId;
++    hud = aHud;
++    outputNode = aHud.outputNode;
+     aHud.jsterm.clearOutput();
+ 
+     browser.addEventListener("load", testWebDevLimits, true);
+     expectUncaughtException();
+     content.location = TEST_URI;
+   });
+ }
+ 
+ function testWebDevLimits(aEvent) {
+   browser.removeEventListener(aEvent.type, testWebDevLimits, true);
+   gOldPref = Services.prefs.getIntPref("devtools.hud.loglimit.console");
+   Services.prefs.setIntPref("devtools.hud.loglimit.console", 10);
+ 
+-  let hud = HUDService.hudReferences[gHudId];
+-  outputNode = hud.outputNode;
++  // Find the sentinel entry.
++  waitForSuccess({
++    name: "bar is not defined",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf("bar is not defined") > -1;
++    },
++    successFn: testWebDevLimits2,
++    failureFn: testWebDevLimits2,
++  });
++}
+ 
+-  // Find the sentinel entry.
+-  findLogEntry("bar is not defined");
+-
++function testWebDevLimits2() {
+   // Fill the log with Web Developer errors.
+   for (let i = 0; i < 11; i++) {
+     hud.console.log("test message " + i);
+   }
+ 
+   waitForSuccess({
+     name: "11 console.log messages displayed",
+     validatorFn: function()
+@@ -71,19 +79,17 @@ function testWebDevLimits(aEvent) {
+     failureFn: testJsLimits,
+   });
+ }
+ 
+ function testJsLimits() {
+   gOldPref = Services.prefs.getIntPref("devtools.hud.loglimit.exception");
+   Services.prefs.setIntPref("devtools.hud.loglimit.exception", 10);
+ 
+-  let hud = HUDService.hudReferences[gHudId];
+   hud.jsterm.clearOutput();
+-  outputNode = hud.outputNode;
+   hud.console.log("testing JS limits");
+ 
+   // Find the sentinel entry.
+   waitForSuccess({
+     name: "console.log 'testing JS limits'",
+     validatorFn: function()
+     {
+       return outputNode.textContent.indexOf("testing JS limits") > -1;
+@@ -98,36 +104,43 @@ function testJsLimits2() {
+   let head = content.document.getElementsByTagName("head")[0];
+   for (let i = 0; i < 11; i++) {
+     var script = content.document.createElement("script");
+     script.text = "fubar" + i + ".bogus(6);";
+     expectUncaughtException();
+     head.insertBefore(script, head.firstChild);
+   }
+ 
+-  executeSoon(function() {
+-    testLogEntry(outputNode, "fubar0 is not defined", "first message is pruned", false, true);
+-    findLogEntry("fubar1 is not defined");
+-    // Check if the sentinel entry is still there.
+-    findLogEntry("testing JS limits");
++  waitForSuccess({
++    name: "10 JS errors shown",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf("fubar10 is not defined") > -1;
++    },
++    successFn: function()
++    {
++      testLogEntry(outputNode, "fubar0 is not defined", "first message is pruned", false, true);
++      findLogEntry("fubar1 is not defined");
++      // Check if the sentinel entry is still there.
++      findLogEntry("testing JS limits");
+ 
+-    Services.prefs.setIntPref("devtools.hud.loglimit.exception", gOldPref);
+-    testNetLimits();
++      Services.prefs.setIntPref("devtools.hud.loglimit.exception", gOldPref);
++      testNetLimits();
++    },
++    failureFn: testNetLimits,
+   });
+ }
+ 
+ var gCounter, gImage;
+ 
+ function testNetLimits() {
+   gOldPref = Services.prefs.getIntPref("devtools.hud.loglimit.network");
+   Services.prefs.setIntPref("devtools.hud.loglimit.network", 10);
+ 
+-  let hud = HUDService.hudReferences[gHudId];
+   hud.jsterm.clearOutput();
+-  outputNode = hud.outputNode;
+   hud.console.log("testing Net limits");
+ 
+   // Find the sentinel entry.
+   waitForSuccess({
+     name: "console.log 'testing Net limits'",
+     validatorFn: function()
+     {
+       return outputNode.textContent.indexOf("testing Net limits") > -1;
+@@ -162,19 +175,17 @@ function loadImage() {
+   Services.prefs.setIntPref("devtools.hud.loglimit.network", gOldPref);
+   testCssLimits();
+ }
+ 
+ function testCssLimits() {
+   gOldPref = Services.prefs.getIntPref("devtools.hud.loglimit.cssparser");
+   Services.prefs.setIntPref("devtools.hud.loglimit.cssparser", 10);
+ 
+-  let hud = HUDService.hudReferences[gHudId];
+   hud.jsterm.clearOutput();
+-  outputNode = hud.outputNode;
+   hud.console.log("testing CSS limits");
+ 
+   // Find the sentinel entry.
+   waitForSuccess({
+     name: "console.log 'testing CSS limits'",
+     validatorFn: function()
+     {
+       return outputNode.textContent.indexOf("testing CSS limits") > -1;
+@@ -187,18 +198,29 @@ function testCssLimits() {
+ function testCssLimits2() {
+   // Fill the log with CSS errors.
+   let body = content.document.getElementsByTagName("body")[0];
+   for (let i = 0; i < 11; i++) {
+     var div = content.document.createElement("div");
+     div.setAttribute("style", "-moz-foobar" + i + ": 42;");
+     body.insertBefore(div, body.firstChild);
+   }
+-  executeSoon(function() {
+-    testLogEntry(outputNode, "Unknown property '-moz-foobar0'", "first message is pruned", false, true);
+-    findLogEntry("Unknown property '-moz-foobar1'");
+-    // Check if the sentinel entry is still there.
+-    findLogEntry("testing CSS limits");
+ 
+-    Services.prefs.setIntPref("devtools.hud.loglimit.cssparser", gOldPref);
+-    finishTest();
++  waitForSuccess({
++    name: "10 CSS errors shown",
++    validatorFn: function()
++    {
++      return outputNode.textContent.indexOf("-moz-foobar10") > -1;
++    },
++    successFn: function()
++    {
++      testLogEntry(outputNode, "Unknown property '-moz-foobar0'",
++                   "first message is pruned", false, true);
++      findLogEntry("Unknown property '-moz-foobar1'");
++      // Check if the sentinel entry is still there.
++      findLogEntry("testing CSS limits");
++
++      Services.prefs.setIntPref("devtools.hud.loglimit.cssparser", gOldPref);
++      finishTest();
++    },
++    failureFn: finishTest,
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_view_source.js b/browser/devtools/webconsole/test/browser_webconsole_view_source.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_view_source.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_view_source.js
+@@ -2,61 +2,61 @@
+  * http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ // Tests that source URLs in the Web Console can be clicked to display the
+ // standard View Source window.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-error.html";
+ 
+ function test() {
+-  expectUncaughtException();
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testViewSource, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(testViewSource);
++  }, true);
+ }
+ 
+-function testViewSource() {
+-  browser.removeEventListener("DOMContentLoaded", testViewSource, false);
+-
+-  openConsole();
+-
++function testViewSource(hud) {
+   let button = content.document.querySelector("button");
+   button = XPCNativeWrapper.unwrap(button);
+   ok(button, "we have the button on the page");
+ 
+-  button.addEventListener("click", buttonClicked, false);
++  expectUncaughtException();
+   EventUtils.sendMouseEvent({ type: "click" }, button, content);
+-}
+ 
+-function buttonClicked(aEvent) {
+-  aEvent.target.removeEventListener("click", buttonClicked, false);
+-  executeSoon(findLocationNode);
++  waitForSuccess({
++    name: "find the location node",
++    validatorFn: function()
++    {
++      return hud.outputNode.querySelector(".webconsole-location");
++    },
++    successFn: function()
++    {
++      let locationNode = hud.outputNode.querySelector(".webconsole-location");
++
++      Services.ww.registerNotification(observer);
++
++      EventUtils.sendMouseEvent({ type: "click" }, locationNode);
++    },
++    failureFn: finishTest,
++  });
+ }
+ 
+ let observer = {
+   observe: function(aSubject, aTopic, aData) {
+     if (aTopic != "domwindowopened") {
+       return;
+     }
+ 
+     ok(true, "the view source window was opened in response to clicking " +
+        "the location node");
+ 
+-    Services.ww.unregisterNotification(this);
+-
+     // executeSoon() is necessary to avoid crashing Firefox. See bug 611543.
+     executeSoon(function() {
+       aSubject.close();
+       finishTest();
+     });
+   }
+ };
+ 
+-function findLocationNode() {
+-  outputNode = HUDService.getHudByWindow(content).outputNode;
+-
+-  let locationNode = outputNode.querySelector(".webconsole-location");
+-  ok(locationNode, "we have the location node");
+-
+-  Services.ww.registerNotification(observer);
+-
+-  EventUtils.sendMouseEvent({ type: "click" }, locationNode);
+-}
+-
++registerCleanupFunction(function() {
++  Services.ww.unregisterNotification(observer);
++});
