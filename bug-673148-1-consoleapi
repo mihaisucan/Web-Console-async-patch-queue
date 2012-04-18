@@ -1,29 +1,31 @@
 # HG changeset patch
-# Parent 51fe735d19a90aef55fe0cf8661f159b650e4cb1
+# Parent e5b8c8c3a39014b6d2eed055f8498721414f88bb
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1334248339 -10800
+# Date 1334770412 -10800
 
 Bug 673148 - (async-webconsole) Part 1 - Make console API async
 
 diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 --- a/browser/devtools/jar.mn
 +++ b/browser/devtools/jar.mn
-@@ -10,9 +10,9 @@ browser.jar:
+@@ -1,11 +1,12 @@
+ browser.jar:
+ *   content/browser/inspector.html                (highlighter/inspector.html)
+     content/browser/NetworkPanel.xhtml            (webconsole/NetworkPanel.xhtml)
++    content/browser/devtools/HUDService-content.js (webconsole/HUDService-content.js)
+ *   content/browser/scratchpad.xul                (scratchpad/scratchpad.xul)
+     content/browser/scratchpad.js                 (scratchpad/scratchpad.js)
+     content/browser/splitview.css                 (shared/splitview.css)
+ *   content/browser/styleeditor.xul               (styleeditor/styleeditor.xul)
+     content/browser/styleeditor.css               (styleeditor/styleeditor.css)
+     content/browser/devtools/csshtmltree.xul      (styleinspector/csshtmltree.xul)
      content/browser/devtools/cssruleview.xul      (styleinspector/cssruleview.xul)
      content/browser/devtools/styleinspector.css   (styleinspector/styleinspector.css)
-     content/browser/orion.js                      (sourceeditor/orion/orion.js)
- *   content/browser/source-editor-overlay.xul     (sourceeditor/source-editor-overlay.xul)
- *   content/browser/debugger.xul                  (debugger/debugger.xul)
-     content/browser/debugger.css                  (debugger/debugger.css)
-     content/browser/debugger.js                   (debugger/debugger.js)
-     content/browser/debugger-view.js              (debugger/debugger-view.js)
--
-+    content/browser/devtools/HUDService-content.js (webconsole/HUDService-content.js)
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -0,0 +1,650 @@
+@@ -0,0 +1,649 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* ***** BEGIN LICENSE BLOCK *****
@@ -70,15 +72,14 @@ new file mode 100644
 +
 +"use strict";
 +
-+(function() {
-+let Cc = Components.classes;
-+let Ci = Components.interfaces;
-+let Cu = Components.utils;
++// This code is appended to the browser content script.
++(function(_global) {
++const Cc = Components.classes;
++const Ci = Components.interfaces;
++const Cu = Components.utils;
 +
 +Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 +Cu.import("resource://gre/modules/Services.jsm");
-+
-+let _global = Cu.getGlobalForObject(Cu); // can't use this in strict mode.
 +
 +XPCOMUtils.defineLazyGetter(_global, "gConsoleStorage", function () {
 +  let obj = {};
@@ -673,7 +674,7 @@ new file mode 100644
 +};
 +
 +Manager.init();
-+})();
++})(this);
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm

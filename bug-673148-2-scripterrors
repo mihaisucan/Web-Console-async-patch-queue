@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 803d11800f2645349bfa585e94fc0c50bcb9810e
+# Parent 1142d79442d191b42c38232cc6f85ccb255cf94b
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1334328229 -10800
+# Date 1334770511 -10800
 
 Bug 673148 - (async-webconsole) Part 2 - Make script and style errors async
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -143,19 +143,21 @@ let Manager = {
+@@ -142,19 +142,21 @@ let Manager = {
     *
     * @param object aMessage
     *        The object received from the remote process. The WebConsole:Init
@@ -32,7 +32,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
     *          ConsoleAPI: { ... }, // ConsoleAPI-specific options
     *          cachedMessages: ["ConsoleAPI"],
     *        }
-@@ -235,16 +237,18 @@ let Manager = {
+@@ -234,16 +236,18 @@ let Manager = {
     * a set of observers/listeners that are added in the content process. This
     * content script exposes the data via the message manager for the features
     * you enable.
@@ -51,7 +51,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
     *        instance. This can be used for feature-specific options.
     */
    enableFeature: function Manager_enableFeature(aFeature, aMessage)
-@@ -255,68 +259,80 @@ let Manager = {
+@@ -254,68 +258,80 @@ let Manager = {
  
      switch (aFeature) {
        case "JSTerm":
@@ -139,7 +139,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    },
  
    /**
-@@ -610,21 +626,17 @@ let ConsoleAPIObserver = {
+@@ -609,21 +625,17 @@ let ConsoleAPIObserver = {
     *         prepared to be sent to the remote Web Console instance.
     */
    getCachedMessages: function CAO_getCachedMessages()
@@ -162,7 +162,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    },
  
    /**
-@@ -641,10 +653,101 @@ let ConsoleAPIObserver = {
+@@ -640,10 +652,101 @@ let ConsoleAPIObserver = {
     */
    destroy: function CAO_destroy()
    {
@@ -263,7 +263,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +};
 +
  Manager.init();
- })();
+ })(this);
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm

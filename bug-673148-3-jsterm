@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent d248ba8bba0d3d0a8c8e33964744fd3a85622cc8
+# Parent 05a27e0af8ea4295033d964f2aa1887f069d59a8
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1334350046 -10800
+# Date 1334780186 -10800
 
 Bug 673148 - (async-webconsole) Part 3 - Make JS evaluation and object inspection async
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -65,24 +65,29 @@ XPCOMUtils.defineLazyGetter(_global, "We
+@@ -64,24 +64,29 @@ XPCOMUtils.defineLazyGetter(_global, "We
    Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
    return obj.WebConsoleUtils;
  });
@@ -39,7 +39,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    _enabledFeatures: null,
  
    /**
-@@ -348,37 +353,359 @@ let Manager = {
+@@ -347,37 +352,359 @@ let Manager = {
  
      this.hudId = null;
      this._messageHandlers = null;
@@ -320,7 +320,6 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
   * Console.
   */
  let JSTerm = {
-+  get console() Manager.window.console,
 +  sandbox: null,
 +  _messageHandlers: {},
 +
@@ -351,6 +350,8 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +      let handler = this._messageHandlers[name].bind(this);
 +      Manager.addMessageHandler(name, handler);
 +    }
++
++    this.createSandbox();
 +  },
 +
 +  handleEvalRequest: function JST_handleEvalRequest(aRequest)
@@ -378,7 +379,6 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    }
 +
 +    let message = {
-+      hudId: this.hudId,
 +      id: id,
 +      input: input,
 +      resultString: resultString,
@@ -391,7 +391,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    if (inspectable) {
 +      message.childrenCacheId = aRequest.resultCacheId;
 +      message.resultObject =
-+        this.prepareObjectForRemote(message.childrenCacheId, result);
++        this.prepareObjectForRemote(result, message.childrenCacheId);
 +    }
 +
 +    Manager.sendMessage("JSTerm:EvalResult", message);
@@ -403,7 +403,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
     *
     * @param object aRequest
     *        The message that requests the content object. Properties: cacheId,
-@@ -439,37 +766,102 @@ let JSTerm = {
+@@ -438,37 +765,105 @@ let JSTerm = {
     *        given object may include references to other objects - those
     *        references will be stored in the given cache ID so the remote
     *        process can later retrieve them as well.
@@ -428,9 +428,8 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
  
 +  handleAutocomplete: function JST_handleAutocomplete(aRequest)
 +  {
-+    let result = JSPropertyProvider(this.window, aRequest.input) || {};
++    let result = JSPropertyProvider(Manager.window, aRequest.input) || {};
 +    let message = {
-+      hudId: this.hudId,
 +      id: aRequest.id,
 +      input: aRequest.input,
 +      matches: result.matches || [],
@@ -441,9 +440,12 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +  createSandbox: function JST_createSandbox()
 +  {
-+    this.sandbox = new Cu.Sandbox(this.window,
-+      { sandboxPrototype: this.window, wantXrays: false });
-+    this.sandbox.console = this.console;
++    this.sandbox = new Cu.Sandbox(Manager.window, {
++      sandboxPrototype: Manager.window,
++      wantXrays: false,
++    });
++
++    this.sandbox.console = Manager.window.console;
 +
 +    JSTermHelper(this);
 +  },
@@ -501,6 +503,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +      Manager.removeMessageHandler(name);
 +    }
  
++    delete this.sandbox;
 +    delete this._messageHandlers;
      delete this._objectCache;
    },
@@ -675,7 +678,47 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @returns void
     */
    shutdown: function HS_shutdown()
-@@ -2512,41 +2485,16 @@ HUD_SERVICE.prototype =
+@@ -2472,39 +2445,16 @@ HUD_SERVICE.prototype =
+                                                      null,
+                                                      clipboardText);
+ 
+     ConsoleUtils.outputMessageNode(messageNode, aActivityObject.hudId);
+     return messageNode;
+   },
+ 
+   /**
+-   * Initialize the JSTerm object to create a JS Workspace by attaching the UI
+-   * into the given parent node, using the mixin.
+-   *
+-   * @param nsIDOMWindow aContext the context used for evaluating user input
+-   * @param nsIDOMNode aParentNode where to attach the JSTerm
+-   * @param object aConsole
+-   *        Console object used within the JSTerm instance to report errors
+-   *        and log data (by calling console.error(), console.log(), etc).
+-   */
+-  initializeJSTerm: function HS_initializeJSTerm(aContext, aParentNode, aConsole)
+-  {
+-    // create Initial JS Workspace:
+-    var context = Cu.getWeakReference(aContext);
+-
+-    // Attach the UI into the target parent node using the mixin.
+-    var firefoxMixin = new JSTermFirefoxMixin(context, aParentNode);
+-    var jsTerm = new JSTerm(context, aParentNode, firefoxMixin, aConsole);
+-
+-    // TODO: injection of additional functionality needs re-thinking/api
+-    // see bug 559748
+-  },
+-
+-  /**
+    * Creates a generator that always returns a unique number for use in the
+    * indexes
+    *
+    * @returns Generator
+    */
+   createSequencer: function HS_createSequencer(aInt)
+   {
+     function sequencer(aInt)
+@@ -2512,41 +2462,16 @@ HUD_SERVICE.prototype =
        while(1) {
          aInt++;
          yield aInt;
@@ -717,7 +760,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    onTabClose: function HS_onTabClose(aEvent)
    {
-@@ -2986,17 +2934,19 @@ HeadsUpDisplay.prototype = {
+@@ -2986,17 +2911,19 @@ HeadsUpDisplay.prototype = {
    /**
     * Message names that the HUD listens for. These messages come from the remote
     * Web Console content script.
@@ -738,7 +781,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    groupDepth: 0,
  
-@@ -3995,17 +3945,17 @@ HeadsUpDisplay.prototype = {
+@@ -3313,17 +3240,17 @@ HeadsUpDisplay.prototype = {
+     }
+     catch (ex) {}
+ 
+     if (appName() == "FIREFOX") {
+       if (!usegcli) {
+         let context = Cu.getWeakReference(aWindow);
+         let mixin = new JSTermFirefoxMixin(context, aParentNode,
+                                            aExistingConsole);
+-        this.jsterm = new JSTerm(context, aParentNode, mixin, this.console);
++        this.jsterm = new JSTerm(this, mixin);
+       }
+       else {
+         this.gcliterm = new GcliTerm(aWindow, this.hudId, this.chromeDocument,
+                                      this.console, this.hintNode, this.consoleWrap);
+         aParentNode.appendChild(this.gcliterm.element);
+       }
+     }
+     else {
+@@ -3995,17 +3922,17 @@ HeadsUpDisplay.prototype = {
            return;
          }
  
@@ -757,7 +819,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      if (level == "dir") {
        // Initialize the inspector message node, by setting the PropertyTreeView
-@@ -4118,19 +4068,27 @@ HeadsUpDisplay.prototype = {
+@@ -4118,19 +4045,27 @@ HeadsUpDisplay.prototype = {
    {
      if (!aMessage.json || aMessage.json.hudId != this.hudId) {
        Cu.reportError("JSTerm: received message " + aMessage.name +
@@ -785,7 +847,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          break;
        case "WebConsole:CachedMessages":
          this._displayCachedConsoleMessages(aMessage.json.messages);
-@@ -4308,498 +4266,16 @@ function NodeFactory(aFactoryType, ignor
+@@ -4251,17 +4186,17 @@ HeadsUpDisplay.prototype = {
+   },
+ 
+   /**
+    * Destroy the HUD object. Call this method to avoid memory leaks when the Web
+    * Console is closed.
+    */
+   destroy: function HUD_destroy()
+   {
+-    this.sendMessageToContent("WebConsole:Destroy", {hudId: this.hudId});
++    this.sendMessageToContent("WebConsole:Destroy", {});
+ 
+     this._messageListeners.forEach(function(aName) {
+       this.messageManager.removeMessageListener(aName, this);
+     }, this);
+ 
+     if (this.jsterm) {
+       this.jsterm.destroy();
+     }
+@@ -4308,558 +4243,65 @@ function NodeFactory(aFactoryType, ignor
        return aDocument.createElement(aTag);
      }
    }
@@ -1284,20 +1365,57 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * and 'JS Workspaces'
   */
  
-@@ -4829,29 +4305,27 @@ function JSTerm(aContext, aParentNode, a
-   this.setTimeout = aParentNode.ownerDocument.defaultView.setTimeout;
+ /**
+  * Create a JSTerminal or attach a JSTerm input node to an existing output node,
+  * given by the parent node.
+  *
+- * @param object aContext
+- *        Usually nsIDOMWindow, but doesn't have to be
+- * @param nsIDOMNode aParentNode where to attach the JSTerm
+- * @param object aMixin
+- *        Gecko-app (or Jetpack) specific utility object
+- * @param object aConsole
+- *        Console object to use within the JSTerm.
++ * @param object aHud
++ *        The HeadsUpDisplay object that owns this JSTerm instance.
+  */
+-function JSTerm(aContext, aParentNode, aMixin, aConsole)
++function JSTerm(aHud, aMixin)
+ {
+   // set the context, attach the UI by appending to aParentNode
  
-   let node = aParentNode;
-   while (!node.hasAttribute("id")) {
-     node = node.parentNode;
-   }
-   this.hudId = node.getAttribute("id");
- 
-+  this.history = {};
+   this.application = appName();
+-  this.context = aContext;
+-  this.parentNode = aParentNode;
++  this.hud = aHud;
++  this.context = Cu.getWeakReference(this.hud.contentWindow);
++  this.parentNode = this.hud.consoleWrap;
+   this.mixins = aMixin;
+-  this.console = aConsole;
+-  this.document = aParentNode.ownerDocument
+-
+-  this.setTimeout = aParentNode.ownerDocument.defaultView.setTimeout;
+-
+-  let node = aParentNode;
+-  while (!node.hasAttribute("id")) {
+-    node = node.parentNode;
+-  }
+-  this.hudId = node.getAttribute("id");
+-
++  this.console = this.hud.console;
++  this.document = this.parentNode.ownerDocument;
++
++  this.setTimeout = this.document.defaultView.setTimeout;
++
++  this.hudId = this.hud.hudId;
++
++  this.lastCompletion = {};
++  this.history = [];
    this.historyIndex = 0;
    this.historyPlaceHolder = 0;  // this.history.length;
    this.log = LogFactory("*** JSTerm:");
-   this.autocompletePopup = new AutocompletePopup(aParentNode.ownerDocument);
+-  this.autocompletePopup = new AutocompletePopup(aParentNode.ownerDocument);
++  this.autocompletePopup = new AutocompletePopup(this.document);
    this.autocompletePopup.onSelect = this.onAutocompleteSelect.bind(this);
    this.autocompletePopup.onClick = this.acceptProposedCompletion.bind(this);
    this.init();
@@ -1313,9 +1431,17 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    init: function JST_init()
    {
-     this.createSandbox();
+-    this.createSandbox();
+-
+     this.inputNode = this.mixins.inputNode;
+     this.outputNode = this.mixins.outputNode;
+     this.completeNode = this.mixins.completeNode;
  
-@@ -4880,203 +4354,106 @@ JSTerm.prototype = {
+     this._keyPress = this.keyPress.bind(this);
+     this._inputEventHandler = this.inputEventHandler.bind(this);
+ 
+     this.inputNode.addEventListener("keypress",
+@@ -4880,203 +4322,102 @@ JSTerm.prototype = {
      this.mixins.generateUI();
    },
  
@@ -1390,7 +1516,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      resultCacheId: "HUDEval-" + HUDService.sequenceId(),
 +    };
 +
-+    this.sendMessageToContent("JSTerm:EvalRequest", message, aCallback);
++    this.hud.sendMessageToContent("JSTerm:EvalRequest", message, aCallback);
 +  },
 +
 +  _executeResultCallback: function JST__executeResultCallback(aResponse)
@@ -1542,12 +1668,12 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        An object that represents the object you want to inspect. Please see
 -   *        the PropertyPanelAsync documentation - this object is passed to the
 -   *        PropertyPanelAsync constructor
+-   * @param object aResponse
+-   *        The response object to display/inspect inside of the tree.
+-   * @param nsIDOMNode aAnchor
+-   *        A node to popup the panel next to (using "after_pointer").
 +   *        the PropertyPanel documentation - this object is passed to the
 +   *        PropertyPanel constructor
-    * @param object aResponse
-    *        The response object to display/inspect inside of the tree.
-    * @param nsIDOMNode aAnchor
-    *        A node to popup the panel next to (using "after_pointer").
     * @return object
 -   *         The new instance of PropertyPanelAsync.
 -   */
@@ -1563,7 +1689,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      if (aOptions.updateButtonCallback) {
        buttons.push({
-@@ -5086,17 +4463,17 @@ JSTerm.prototype = {
+@@ -5086,17 +4427,17 @@ JSTerm.prototype = {
        });
      }
  
@@ -1582,7 +1708,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        propPanel.panel.addEventListener("popuphiding", function onPopupHide() {
          propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
          aOptions.anchor._panelOpen = false;
-@@ -5107,79 +4484,49 @@ JSTerm.prototype = {
+@@ -5107,79 +4448,50 @@ JSTerm.prototype = {
      return propPanel;
    },
  
@@ -1657,6 +1783,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        The severity of message: one of the SEVERITY_ constants.
     * @returns void
     */
++  // TODO: update comment.
    writeOutput: function JST_writeOutput(aOutputMessage, aCategory, aSeverity)
    {
 -    let node = ConsoleUtils.createMessageNode(this.document,
@@ -1676,7 +1803,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @param boolean aClearStorage
     *        True if you want to clear the console messages storage associated to
     *        this Web Console.
-@@ -5450,27 +4797,27 @@ JSTerm.prototype = {
+@@ -5450,27 +4762,27 @@ JSTerm.prototype = {
        return false;
      }
  
@@ -1706,7 +1833,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *          cursor position to the end of the completed text.
     *          If there is only one possible completion, then this completion
     *          value is used and the cursor is put at the end of the completion.
-@@ -5482,99 +4829,140 @@ JSTerm.prototype = {
+@@ -5482,99 +4794,144 @@ JSTerm.prototype = {
     *          last time this function was called, then the same completion is
     *          used again. If there is only one possible completion, then
     *          the inputNode.value is set to this value and the selection is set
@@ -1802,8 +1929,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    };
 +
 +    this.lastCompletion = {requestId: message.id, completionType: aType};
-+    this.sendMessageToContent("JSTerm:Autocomplete", message,
-+                              this.receiveAutocompleteProperties.bind(this));
++    this.hud.sendMessageToContent("JSTerm:Autocomplete", message,
++                                  this.receiveAutocompleteProperties.bind(this));
 +  },
 +
 +
@@ -1812,7 +1939,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +  {
 +    let inputNode = this.inputNode;
 +    let inputValue = inputNode.value;
-+    if (aMessage.input != inputValue || this.lastCompletion.value == inputValue ||
++    if (aMessage.input != inputValue ||
++        this.lastCompletion.value == inputValue ||
 +        aMessage.id != this.lastCompletion.requestId) {
 +      return;
 +    }
@@ -1824,14 +1952,17 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    }
 +
 +    let items = matches.map(function(aMatch) {
-+      return {label: aMatch};
++      return { label: aMatch };
 +    });
 +
 +    let popup = this.autocompletePopup;
 +    popup.setItems(items);
 +
 +    let completionType = this.lastCompletion.completionType;
-+    this.lastCompletion = {value: inputValue, matchProp: aMessage.matchProp};
++    this.lastCompletion = {
++      value: inputValue,
++      matchProp: aMessage.matchProp,
++    };
 +
 +    if (items.length > 1 && !popup.isOpen) {
 +      popup.openPopup(inputNode);
@@ -1884,7 +2015,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Accept the proposed input completion.
-@@ -5583,17 +4971,17 @@ JSTerm.prototype = {
+@@ -5583,17 +4940,17 @@ JSTerm.prototype = {
     *         True if there was a selected completion item and the input value
     *         was updated, false otherwise.
     */
@@ -1903,15 +2034,40 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      this.clearCompletion();
  
-@@ -5649,24 +5037,140 @@ JSTerm.prototype = {
+@@ -5617,18 +4974,17 @@ JSTerm.prototype = {
+    * Clear the object cache from the Web Console content instance.
+    *
+    * @param string aCacheId
+    *        The cache ID you want to clear. Multiple objects are cached into one
+    *        group which is given an ID.
+    */
+   clearObjectCache: function JST_clearObjectCache(aCacheId)
+   {
+-    let hud = HUDService.getHudReferenceById(this.hudId);
+-    hud.sendMessageToContent("JSTerm:ClearObjectCache", {cacheId: aCacheId});
++    this.hud.sendMessageToContent("JSTerm:ClearObjectCache", {cacheId: aCacheId});
+   },
+ 
+   /**
+    * The remote object provider allows you to retrieve a given object from
+    * a specific cache and have your callback invoked when the desired object is
+    * received from the Web Console content instance.
+    *
+    * @param string aCacheId
+@@ -5645,28 +5001,139 @@ JSTerm.prototype = {
+   function JST_remoteObjectProvider(aCacheId, aObjectId, aResultCacheId,
+                                     aCallback) {
+     let message = {
+       cacheId: aCacheId,
        objectId: aObjectId,
        resultCacheId: aResultCacheId,
      };
  
-     let hud = HUDService.getHudReferenceById(this.hudId);
-     hud.sendMessageToContent("JSTerm:GetEvalObject", message, aCallback);
-   },
- 
+-    let hud = HUDService.getHudReferenceById(this.hudId);
+-    hud.sendMessageToContent("JSTerm:GetEvalObject", message, aCallback);
++    this.hud.sendMessageToContent("JSTerm:GetEvalObject", message, aCallback);
++  },
++
 +  handleInspectObject: function JST_handleInspectObject(aRequest)
 +  {
 +    let options = {
@@ -1930,8 +2086,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +    let onPopupHide = function() {
 +      propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
-+
-+      dump("panel popuphiding panelCacheId " + options.data.panelCacheId + "\n");
 +
 +      this.clearObjectCache(options.data.panelCacheId);
 +    }.bind(this);
@@ -1970,8 +2124,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +    let onPopupHide = function() {
 +      propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
-+
-+      dump("panel popuphiding panelCacheId " + options.data.panelCacheId + " aAnchor.parentNode " + aLinkNode.parentNode + " _evalCacheId " + aLinkNode._evalCacheId + "\n");
 +
 +      this.clearObjectCache(options.data.panelCacheId);
 +
@@ -2019,8 +2171,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    // However, the states of open nodes is not saved.
 +    // See bug 586246.
 +    aPropPanel.treeView.data = aOptions.data;
-+  },
-+
+   },
+ 
    /**
     * Destroy the JSTerm object. Call this method to avoid memory leaks.
     */
@@ -2044,7 +2196,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * essentially consists of the interactive JavaScript input facility.
   *
   * @param nsWeakPtr<nsIDOMWindow> aContext
-@@ -6405,86 +5909,46 @@ HeadsUpDisplayUICommands = {
+@@ -5956,17 +5423,17 @@ ConsoleUtils = {
+       tree.appendChild(treecols);
+ 
+       tree.appendChild(aDocument.createElement("treechildren"));
+ 
+       bodyContainer.appendChild(tree);
+       node.appendChild(bodyContainer);
+       node.classList.add("webconsole-msg-inspector");
+       // Create the treeView object.
+-      let treeView = node.propertyTreeView = new PropertyTreeViewAsync();
++      let treeView = node.propertyTreeView = new PropertyTreeView();
+ 
+       treeView.data = {
+         rootCacheId: body.cacheId,
+         panelCacheId: body.cacheId,
+         remoteObject: body.remoteObject,
+         remoteObjectProvider: body.remoteObjectProvider,
+       };
+ 
+@@ -6405,86 +5872,46 @@ HeadsUpDisplayUICommands = {
        }
        case "saveBodies": {
          let checked = aButton.getAttribute("checked") === "true";
@@ -2136,7 +2307,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  /**
   * A controller (an instance of nsIController) that makes editing actions
-@@ -6924,16 +6388,17 @@ GcliTerm.prototype = {
+@@ -6924,16 +6351,17 @@ GcliTerm.prototype = {
  
          linkNode.addEventListener("click", function(aEv) {
            if (aEv.detail != 1 || aEv.button != 0 ||
@@ -2154,6 +2325,1286 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
          output = linkNode;
        }
+diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
+--- a/browser/devtools/webconsole/Makefile.in
++++ b/browser/devtools/webconsole/Makefile.in
+@@ -41,17 +41,16 @@ DEPTH		= ../../..
+ topsrcdir	= @top_srcdir@
+ srcdir		= @srcdir@
+ VPATH		= @srcdir@
+ 
+ include $(DEPTH)/config/autoconf.mk
+ 
+ EXTRA_JS_MODULES = \
+ 		PropertyPanel.jsm \
+-		PropertyPanelAsync.jsm \
+ 		NetworkHelper.jsm \
+ 		AutocompletePopup.jsm \
+ 		WebConsoleUtils.jsm \
+ 		gcli.jsm \
+ 		GcliCommands.jsm \
+ 		GcliTiltCommands.jsm \
+ 		$(NULL)
+ 
+diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/webconsole/PropertyPanel.jsm
+--- a/browser/devtools/webconsole/PropertyPanel.jsm
++++ b/browser/devtools/webconsole/PropertyPanel.jsm
+@@ -8,443 +8,312 @@
+  * the License. You may obtain a copy of the License at
+  * http://www.mozilla.org/MPL/
+  *
+  * Software distributed under the License is distributed on an "AS IS" basis,
+  * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+  * for the specific language governing rights and limitations under the
+  * License.
+  *
+- * The Original Code is DevTools (HeadsUpDisplay) Console Code
++ * The Original Code is DevTools Web Console Property Panel.
+  *
+  * The Initial Developer of the Original Code is
+  * the Mozilla Foundation.
+  * Portions created by the Initial Developer are Copyright (C) 2010
+  * the Initial Developer. All Rights Reserved.
+  *
+  * Contributor(s):
+  *   Rob Campbell <rcampbell@mozilla.com>
+  *   Julian Viereck <jviereck@mozilla.com>
++ *   Mihai Sucan <mihai.sucan@gmail.com>
+  *
+  * Alternatively, the contents of this file may be used under the terms of
+  * either the GNU General Public License Version 2 or later (the "GPL"), or
+  * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
+  * in which case the provisions of the GPL or the LGPL are applicable instead
+  * of those above. If you wish to allow use of your version of this file only
+  * under the terms of either the GPL or the LGPL, and not to allow others to
+  * use your version of this file under the terms of the MPL, indicate your
+  * decision by deleting the provisions above and replace them with the notice
+  * and other provisions required by the GPL or the LGPL. If you do not delete
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
++"use strict";
++
+ const Cc = Components.classes;
+ const Ci = Components.interfaces;
+ const Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ 
+-var EXPORTED_SYMBOLS = ["PropertyPanel", "PropertyTreeView",
+-                        "namesAndValuesOf", "isNonNativeGetter"];
++XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function () {
++  let obj = {};
++  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
++  return obj.WebConsoleUtils;
++});
+ 
+-///////////////////////////////////////////////////////////////////////////
+-//// Helper for PropertyTreeView
++var EXPORTED_SYMBOLS = ["PropertyPanel", "PropertyTreeView"];
+ 
+-const TYPE_OBJECT = 0, TYPE_FUNCTION = 1, TYPE_ARRAY = 2, TYPE_OTHER = 3;
+-
+-/**
+- * Figures out the type of aObject and the string to display in the tree.
+- *
+- * @param object aObject
+- *        The object to operate on.
+- * @returns object
+- *          A object with the form:
+- *            {
+- *              type: TYPE_OBJECT || TYPE_FUNCTION || TYPE_ARRAY || TYPE_OTHER,
+- *              display: string for displaying the object in the tree
+- *            }
+- */
+-function presentableValueFor(aObject)
+-{
+-  if (aObject === null || aObject === undefined) {
+-    return {
+-      type: TYPE_OTHER,
+-      display: aObject === undefined ? "undefined" : "null"
+-    };
+-  }
+-
+-  let presentable;
+-  switch (aObject.constructor && aObject.constructor.name) {
+-    case "Array":
+-      return {
+-        type: TYPE_ARRAY,
+-        display: "Array"
+-      };
+-
+-    case "String":
+-      return {
+-        type: TYPE_OTHER,
+-        display: "\"" + aObject + "\""
+-      };
+-
+-    case "Date":
+-    case "RegExp":
+-    case "Number":
+-    case "Boolean":
+-      return {
+-        type: TYPE_OTHER,
+-        display: aObject
+-      };
+-
+-    case "Iterator":
+-      return {
+-        type: TYPE_OTHER,
+-        display: "Iterator"
+-      };
+-
+-    case "Function":
+-      presentable = aObject.toString();
+-      return {
+-        type: TYPE_FUNCTION,
+-        display: presentable.substring(0, presentable.indexOf(')') + 1)
+-      };
+-
+-    default:
+-      presentable = aObject.toString();
+-      let m = /^\[object (\S+)\]/.exec(presentable);
+-
+-      try {
+-        if (typeof aObject == "object" && typeof aObject.next == "function" &&
+-            m && m[1] == "Generator") {
+-          return {
+-            type: TYPE_OTHER,
+-            display: m[1]
+-          };
+-        }
+-      }
+-      catch (ex) {
+-        // window.history.next throws in the typeof check above.
+-        return {
+-          type: TYPE_OBJECT,
+-          display: m ? m[1] : "Object"
+-        };
+-      }
+-
+-      if (typeof aObject == "object" && typeof aObject.__iterator__ == "function") {
+-        return {
+-          type: TYPE_OTHER,
+-          display: "Iterator"
+-        };
+-      }
+-
+-      return {
+-        type: TYPE_OBJECT,
+-        display: m ? m[1] : "Object"
+-      };
+-  }
+-}
+-
+-/**
+- * Tells if the given function is native or not.
+- *
+- * @param function aFunction
+- *        The function you want to check if it is native or not.
+- *
+- * @return boolean
+- *         True if the given function is native, false otherwise.
+- */
+-function isNativeFunction(aFunction)
+-{
+-  return typeof aFunction == "function" && !("prototype" in aFunction);
+-}
+-
+-/**
+- * Tells if the given property of the provided object is a non-native getter or
+- * not.
+- *
+- * @param object aObject
+- *        The object that contains the property.
+- *
+- * @param string aProp
+- *        The property you want to check if it is a getter or not.
+- *
+- * @return boolean
+- *         True if the given property is a getter, false otherwise.
+- */
+-function isNonNativeGetter(aObject, aProp) {
+-  if (typeof aObject != "object") {
+-    return false;
+-  }
+-  let desc;
+-  while (aObject) {
+-    try {
+-      if (desc = Object.getOwnPropertyDescriptor(aObject, aProp)) {
+-        break;
+-      }
+-    }
+-    catch (ex) {
+-      // Native getters throw here. See bug 520882.
+-      if (ex.name == "NS_ERROR_XPC_BAD_CONVERT_JS" ||
+-          ex.name == "NS_ERROR_XPC_BAD_OP_ON_WN_PROTO") {
+-        return false;
+-      }
+-      throw ex;
+-    }
+-    aObject = Object.getPrototypeOf(aObject);
+-  }
+-  if (desc && desc.get && !isNativeFunction(desc.get)) {
+-    return true;
+-  }
+-  return false;
+-}
+-
+-/**
+- * Get an array of property name value pairs for the tree.
+- *
+- * @param object aObject
+- *        The object to get properties for.
+- * @returns array of object
+- *          Objects have the name, value, display, type, children properties.
+- */
+-function namesAndValuesOf(aObject)
+-{
+-  let pairs = [];
+-  let value, presentable;
+-
+-  let isDOMDocument = aObject instanceof Ci.nsIDOMDocument;
+-
+-  for (var propName in aObject) {
+-    // See bug 632275: skip deprecated width and height properties.
+-    if (isDOMDocument && (propName == "width" || propName == "height")) {
+-      continue;
+-    }
+-
+-    // Also skip non-native getters.
+-    if (isNonNativeGetter(aObject, propName)) {
+-      value = ""; // Value is never displayed.
+-      presentable = {type: TYPE_OTHER, display: "Getter"};
+-    }
+-    else {
+-      try {
+-        value = aObject[propName];
+-        presentable = presentableValueFor(value);
+-      }
+-      catch (ex) {
+-        continue;
+-      }
+-    }
+-
+-    let pair = {};
+-    pair.name = propName;
+-    pair.display = propName + ": " + presentable.display;
+-    pair.type = presentable.type;
+-    pair.value = value;
+-
+-    // Convert the pair.name to a number for later sorting.
+-    pair.nameNumber = parseFloat(pair.name)
+-    if (isNaN(pair.nameNumber)) {
+-      pair.nameNumber = false;
+-    }
+-
+-    pairs.push(pair);
+-  }
+-
+-  pairs.sort(function(a, b)
+-  {
+-    // Sort numbers.
+-    if (a.nameNumber !== false && b.nameNumber === false) {
+-      return -1;
+-    }
+-    else if (a.nameNumber === false && b.nameNumber !== false) {
+-      return 1;
+-    }
+-    else if (a.nameNumber !== false && b.nameNumber !== false) {
+-      return a.nameNumber - b.nameNumber;
+-    }
+-    // Sort string.
+-    else if (a.name < b.name) {
+-      return -1;
+-    }
+-    else if (a.name > b.name) {
+-      return 1;
+-    }
+-    else {
+-      return 0;
+-    }
+-  });
+-
+-  return pairs;
+-}
+ 
+ ///////////////////////////////////////////////////////////////////////////
+ //// PropertyTreeView.
+ 
+-
+ /**
+  * This is an implementation of the nsITreeView interface. For comments on the
+  * interface properties, see the documentation:
+  * https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsITreeView
+  */
+ var PropertyTreeView = function() {
+   this._rows = [];
+ };
+ 
+ PropertyTreeView.prototype = {
+-
+   /**
+    * Stores the visible rows of the tree.
+    */
+   _rows: null,
+ 
+   /**
+    * Stores the nsITreeBoxObject for this tree.
+    */
+   _treeBox: null,
+ 
+   /**
+    * Use this setter to update the content of the tree.
+    *
+    * @param object aObject
+-   *        The new object to be displayed in the tree.
+-   * @returns void
++   *        An object that holds information about the object you want to
++   *        display in the property panel. Object properties:
++   *        - object:
++   *        This is the raw object you want to display. You can only provide
++   *        this object if you want the property panel to work in sync mode.
++   *        - remoteObject:
++   *        An array that holds information on the remote object being
++   *        inspected. Each element in this array describes each property in the
++   *        remote object. See WebConsoleUtils.namesAndValuesOf() for details.
++   *        - rootCacheId:
++   *        The cache ID where the objects referenced in remoteObject are found.
++   *        - panelCacheId:
++   *        The cache ID where any object retrieved by this property panel
++   *        instance should be stored into.
++   *        - remoteObjectProvider:
++   *        A function that is invoked when a new object is needed. This is
++   *        called when the user tries to expand an inspectable property. The
++   *        callback must take four arguments:
++   *          - fromCacheId:
++   *          Tells from where to retrieve the object the user picked (from
++   *          which cache ID).
++   *          - objectId:
++   *          The object ID the user wants.
++   *          - panelCacheId:
++   *          Tells in which cache ID to store the objects referenced by
++   *          objectId so they can be retrieved later.
++   *          - callback:
++   *          The callback function to be invoked when the remote object is
++   *          received. This function takes one argument: the raw message
++   *          received from the Web Console content script.
+    */
+-  set data(aObject) {
++  set data(aData) {
+     let oldLen = this._rows.length;
+-    this._rows = this.getChildItems(aObject, true);
++
++    this._cleanup();
++
++    if (!aData) {
++      return;
++    }
++
++    if (aData.remoteObject) {
++      this._rootCacheId = aData.rootCacheId;
++      this._panelCacheId = aData.panelCacheId;
++      this._remoteObjectProvider = aData.remoteObjectProvider;
++      this._rows = [].concat(aData.remoteObject);
++      this._updateRemoteObject(this._rows, 0);
++    }
++    else if (aData.object) {
++      this._rows = this._inspectObject(aData.object);
++    }
++    else {
++      throw new Error("First argument must have a .remoteObject or " +
++                      "an .object property!");
++    }
++
+     if (this._treeBox) {
+       this._treeBox.beginUpdateBatch();
+       if (oldLen) {
+         this._treeBox.rowCountChanged(0, -oldLen);
+       }
+       this._treeBox.rowCountChanged(0, this._rows.length);
+       this._treeBox.endUpdateBatch();
+     }
+   },
+ 
+   /**
+-   * Generates the child items for the treeView of a given aItem. If there is
+-   * already a children property on the aItem, this cached one is returned.
++   * Update a remote object so it can be used with the tree view. This method
++   * adds properties to each array element.
+    *
+-   * @param object aItem
+-   *        An item of the tree's elements to generate the children for.
+-   * @param boolean aRootElement
+-   *        If set, aItem is handled as an JS object and not as an item
+-   *        element of the tree.
+-   * @returns array of objects
+-   *        Child items of aItem.
++   * @private
++   * @param array aObject
++   *        The remote object you want prepared for use with the tree view.
++   * @param number aLevel
++   *        The level you want to give to each property in the remote object.
+    */
+-  getChildItems: function(aItem, aRootElement)
++  _updateRemoteObject: function PTV__updateRemoteObject(aObject, aLevel)
+   {
+-    // If item.children is an array, then the children has already been
+-    // computed and can get returned directly.
+-    // Skip this checking if aRootElement is true. It could happen, that aItem
+-    // is passed as ({children:[1,2,3]}) which would be true, although these
+-    // "kind" of children has no value/type etc. data as needed to display in
+-    // the tree. As the passed ({children:[1,2,3]}) are instanceof
+-    // itsWindow.Array and not this modules's global Array
+-    // aItem.children instanceof Array can't be true, but for saftey the
+-    // !aRootElement is kept here.
+-    if (!aRootElement && aItem && aItem.children instanceof Array) {
+-      return aItem.children;
+-    }
++    aObject.forEach(function(aElement) {
++      aElement.level = aLevel;
++      aElement.isOpened = false;
++      aElement.children = null;
++    });
++  },
+ 
+-    let pairs;
+-    let newPairLevel;
++  /**
++   * Inspect a local object.
++   *
++   * @private
++   * @param object aObject
++   *        The object you want to inspect.
++   */
++  _inspectObject: function PTV__inspectObject(aObject)
++  {
++    this._objectCache = {};
++    this._remoteObjectProvider = this._localObjectProvider.bind(this);
++    let children = WebConsoleUtils.namesAndValuesOf(aObject, this._objectCache);
++    this._updateRemoteObject(children, 0);
++    return children;
++  },
+ 
+-    if (!aRootElement) {
+-      newPairLevel = aItem.level + 1;
+-      aItem = aItem.value;
+-    }
+-    else {
+-      newPairLevel = 0;
+-    }
+-
+-    pairs = namesAndValuesOf(aItem);
+-
+-    for each (var pair in pairs) {
+-      pair.level = newPairLevel;
+-      pair.isOpened = false;
+-      pair.children = pair.type == TYPE_OBJECT || pair.type == TYPE_FUNCTION ||
+-                      pair.type == TYPE_ARRAY;
+-    }
+-
+-    return pairs;
++  /**
++   * An object provider for when the user inspects local objects (not remote
++   * ones).
++   *
++   * @private
++   * @param string aFromCacheId
++   *        The cache ID from where to retrieve the desired object.
++   * @param string aObjectId
++   *        The ID of the object you want.
++   * @param string aDestCacheId
++   *        The ID of the cache where to store any objects referenced by the
++   *        desired object.
++   * @param function aCallback
++   *        The function you want to receive the object.
++   */
++  _localObjectProvider:
++  function PTV__localObjectProvider(aFromCacheId, aObjectId, aDestCacheId,
++                                    aCallback)
++  {
++    let object = WebConsoleUtils.namesAndValuesOf(this._objectCache[aObjectId],
++                                                  this._objectCache);
++    aCallback({cacheId: aFromCacheId,
++               objectId: aObjectId,
++               object: object,
++               childrenCacheId: aDestCacheId || aFromCacheId,
++    });
+   },
+ 
+   /** nsITreeView interface implementation **/
+ 
+   selection: null,
+ 
+   get rowCount()                     { return this._rows.length; },
+   setTree: function(treeBox)         { this._treeBox = treeBox;  },
+-  getCellText: function(idx, column) { return this._rows[idx].display; },
+-  getLevel: function(idx)            { return this._rows[idx].level; },
+-  isContainer: function(idx)         { return !!this._rows[idx].children; },
+-  isContainerOpen: function(idx)     { return this._rows[idx].isOpened; },
++  getCellText: function(idx, column) {
++    let row = this._rows[idx];
++    return row.name + ": " + row.value;
++  },
++  getLevel: function(idx) {
++    return this._rows[idx].level;
++  },
++  isContainer: function(idx) {
++    return !!this._rows[idx].inspectable;
++  },
++  isContainerOpen: function(idx) {
++    return this._rows[idx].isOpened;
++  },
+   isContainerEmpty: function(idx)    { return false; },
+   isSeparator: function(idx)         { return false; },
+   isSorted: function()               { return false; },
+   isEditable: function(idx, column)  { return false; },
+   isSelectable: function(row, col)   { return true; },
+ 
+   getParentIndex: function(idx)
+   {
+     if (this.getLevel(idx) == 0) {
+       return -1;
+     }
+-    for (var t = idx - 1; t >= 0 ; t--) {
++    for (var t = idx - 1; t >= 0; t--) {
+       if (this.isContainer(t)) {
+         return t;
+       }
+     }
+     return -1;
+   },
+ 
+   hasNextSibling: function(idx, after)
+   {
+     var thisLevel = this.getLevel(idx);
+     return this._rows.slice(after + 1).some(function (r) r.level == thisLevel);
+   },
+ 
+   toggleOpenState: function(idx)
+   {
+-    var item = this._rows[idx];
+-    if (!item.children) {
++    let item = this._rows[idx];
++    if (!item.inspectable) {
+       return;
+     }
+ 
+-    this._treeBox.beginUpdateBatch();
+     if (item.isOpened) {
++      this._treeBox.beginUpdateBatch();
+       item.isOpened = false;
+ 
+       var thisLevel = item.level;
+       var t = idx + 1, deleteCount = 0;
+       while (t < this._rows.length && this.getLevel(t++) > thisLevel) {
+         deleteCount++;
+       }
+ 
+       if (deleteCount) {
+         this._rows.splice(idx + 1, deleteCount);
+         this._treeBox.rowCountChanged(idx + 1, -deleteCount);
+       }
++      this._treeBox.invalidateRow(idx);
++      this._treeBox.endUpdateBatch();
+     }
+     else {
+-      item.isOpened = true;
++      let levelUpdate = true;
++      let callback = function _onRemoteResponse(aResponse) {
++        this._treeBox.beginUpdateBatch();
++        item.isOpened = true;
+ 
+-      var toInsert = this.getChildItems(item);
+-      item.children = toInsert;
+-      this._rows.splice.apply(this._rows, [idx + 1, 0].concat(toInsert));
++        if (levelUpdate) {
++          this._updateRemoteObject(aResponse.object, item.level + 1);
++          item.children = aResponse.object;
++        }
+ 
+-      this._treeBox.rowCountChanged(idx + 1, toInsert.length);
++        this._rows.splice.apply(this._rows, [idx + 1, 0].concat(item.children));
++
++        this._treeBox.rowCountChanged(idx + 1, item.children.length);
++        this._treeBox.invalidateRow(idx);
++        this._treeBox.endUpdateBatch();
++      }.bind(this);
++
++      if (!item.children) {
++        let fromCacheId = item.level > 0 ? this._panelCacheId :
++                                           this._rootCacheId;
++        this._remoteObjectProvider(fromCacheId, item.objectId,
++                                   this._panelCacheId, callback);
++      }
++      else {
++        levelUpdate = false;
++        callback({object: item.children});
++      }
+     }
+-    this._treeBox.invalidateRow(idx);
+-    this._treeBox.endUpdateBatch();
+   },
+ 
+   getImageSrc: function(idx, column) { },
+   getProgressMode : function(idx,column) { },
+   getCellValue: function(idx, column) { },
+   cycleHeader: function(col, elem) { },
+   selectionChanged: function() { },
+   cycleCell: function(idx, column) { },
+@@ -453,17 +322,31 @@ PropertyTreeView.prototype = {
+   performActionOnRow: function(action, row) { },
+   getRowProperties: function(idx, column, prop) { },
+   getCellProperties: function(idx, column, prop) { },
+   getColumnProperties: function(column, element, prop) { },
+ 
+   setCellValue: function(row, col, value)               { },
+   setCellText: function(row, col, value)                { },
+   drop: function(index, orientation, dataTransfer)      { },
+-  canDrop: function(index, orientation, dataTransfer)   { return false; }
++  canDrop: function(index, orientation, dataTransfer)   { return false; },
++
++  _cleanup: function PTV__cleanup()
++  {
++    if (this._rows.length) {
++      // Reset the existing _rows children to the initial state.
++      this._updateRemoteObject(this._rows, 0);
++      this._rows = [];
++    }
++
++    delete this._objectCache;
++    delete this._rootCacheId;
++    delete this._panelCacheId;
++    delete this._remoteObjectProvider;
++  },
+ };
+ 
+ ///////////////////////////////////////////////////////////////////////////
+ //// Helper for creating the panel.
+ 
+ /**
+  * Creates a DOMNode and sets all the attributes of aAttributes on the created
+  * element.
+@@ -506,74 +389,76 @@ function appendChild(aDocument, aParent,
+ }
+ 
+ ///////////////////////////////////////////////////////////////////////////
+ //// PropertyPanel
+ 
+ /**
+  * Creates a new PropertyPanel.
+  *
++ * @see PropertyTreeView
+  * @param nsIDOMNode aParent
+  *        Parent node to append the created panel to.
+- * @param nsIDOMDocument aDocument
+- *        Document to create the new nodes on.
+  * @param string aTitle
+  *        Title for the panel.
+  * @param string aObject
+- *        Object to display in the tree.
++ *        Object to display in the tree. For details about this object please
++ *        see the PropertyTreeView constructor in this file.
+  * @param array of objects aButtons
+  *        Array with buttons to display at the bottom of the panel.
+  */
+-function PropertyPanel(aParent, aDocument, aTitle, aObject, aButtons)
++function PropertyPanel(aParent, aTitle, aObject, aButtons)
+ {
++  let document = aParent.ownerDocument;
++
+   // Create the underlying panel
+-  this.panel = createElement(aDocument, "panel", {
++  this.panel = createElement(document, "panel", {
+     label: aTitle,
+     titlebar: "normal",
+     noautofocus: "true",
+     noautohide: "true",
+     close: "true",
+   });
+ 
+   // Create the tree.
+-  let tree = this.tree = createElement(aDocument, "tree", {
++  let tree = this.tree = createElement(document, "tree", {
+     flex: 1,
+     hidecolumnpicker: "true"
+   });
+ 
+-  let treecols = aDocument.createElement("treecols");
+-  appendChild(aDocument, treecols, "treecol", {
++  let treecols = document.createElement("treecols");
++  appendChild(document, treecols, "treecol", {
+     primary: "true",
+     flex: 1,
+     hideheader: "true",
+     ignoreincolumnpicker: "true"
+   });
+   tree.appendChild(treecols);
+ 
+-  tree.appendChild(aDocument.createElement("treechildren"));
++  tree.appendChild(document.createElement("treechildren"));
+   this.panel.appendChild(tree);
+ 
+   // Create the footer.
+-  let footer = createElement(aDocument, "hbox", { align: "end" });
+-  appendChild(aDocument, footer, "spacer", { flex: 1 });
++  let footer = createElement(document, "hbox", { align: "end" });
++  appendChild(document, footer, "spacer", { flex: 1 });
+ 
+   // The footer can have butttons.
+   let self = this;
+   if (aButtons) {
+     aButtons.forEach(function(button) {
+-      let buttonNode = appendChild(aDocument, footer, "button", {
++      let buttonNode = appendChild(document, footer, "button", {
+         label: button.label,
+         accesskey: button.accesskey || "",
+         class: button.class || "",
+       });
+       buttonNode.addEventListener("command", button.oncommand, false);
+     });
+   }
+ 
+-  appendChild(aDocument, footer, "resizer", { dir: "bottomend" });
++  appendChild(document, footer, "resizer", { dir: "bottomend" });
+   this.panel.appendChild(footer);
+ 
+   aParent.appendChild(this.panel);
+ 
+   // Create the treeView object.
+   this.treeView = new PropertyTreeView();
+   this.treeView.data = aObject;
+ 
+@@ -588,25 +473,20 @@ function PropertyPanel(aParent, aDocumen
+   this.panel.addEventListener("popuphidden", function onPopupHide()
+   {
+     self.panel.removeEventListener("popuphidden", onPopupHide, false);
+     self.destroy();
+   }, false);
+ }
+ 
+ /**
+- * Destroy the PropertyPanel. This closes the poped up panel and removes
+- * it from the browser DOM.
+- *
+- * @returns void
++ * Destroy the PropertyPanel. This closes the panel and removes it from the
++ * browser DOM.
+  */
+ PropertyPanel.prototype.destroy = function PP_destroy()
+ {
++  this.treeView.data = null;
+   this.panel.parentNode.removeChild(this.panel);
+   this.treeView = null;
+   this.panel = null;
+   this.tree = null;
++}
+ 
+-  if (this.linkNode) {
+-    this.linkNode._panelOpen = false;
+-    this.linkNode = null;
+-  }
+-}
+diff --git a/browser/devtools/webconsole/PropertyPanelAsync.jsm b/browser/devtools/webconsole/PropertyPanelAsync.jsm
+deleted file mode 100644
+--- a/browser/devtools/webconsole/PropertyPanelAsync.jsm
++++ /dev/null
+@@ -1,492 +0,0 @@
+-/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+-/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+-/* ***** BEGIN LICENSE BLOCK *****
+- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
+- *
+- * The contents of this file are subject to the Mozilla Public License Version
+- * 1.1 (the "License"); you may not use this file except in compliance with
+- * the License. You may obtain a copy of the License at
+- * http://www.mozilla.org/MPL/
+- *
+- * Software distributed under the License is distributed on an "AS IS" basis,
+- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+- * for the specific language governing rights and limitations under the
+- * License.
+- *
+- * The Original Code is DevTools Web Console Property Panel.
+- *
+- * The Initial Developer of the Original Code is
+- * the Mozilla Foundation.
+- * Portions created by the Initial Developer are Copyright (C) 2010
+- * the Initial Developer. All Rights Reserved.
+- *
+- * Contributor(s):
+- *   Rob Campbell <rcampbell@mozilla.com>
+- *   Julian Viereck <jviereck@mozilla.com>
+- *   Mihai Sucan <mihai.sucan@gmail.com>
+- *
+- * Alternatively, the contents of this file may be used under the terms of
+- * either the GNU General Public License Version 2 or later (the "GPL"), or
+- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
+- * in which case the provisions of the GPL or the LGPL are applicable instead
+- * of those above. If you wish to allow use of your version of this file only
+- * under the terms of either the GPL or the LGPL, and not to allow others to
+- * use your version of this file under the terms of the MPL, indicate your
+- * decision by deleting the provisions above and replace them with the notice
+- * and other provisions required by the GPL or the LGPL. If you do not delete
+- * the provisions above, a recipient may use your version of this file under
+- * the terms of any one of the MPL, the GPL or the LGPL.
+- *
+- * ***** END LICENSE BLOCK ***** */
+-
+-"use strict";
+-
+-const Cc = Components.classes;
+-const Ci = Components.interfaces;
+-const Cu = Components.utils;
+-
+-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+-Cu.import("resource://gre/modules/Services.jsm");
+-
+-XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function () {
+-  let obj = {};
+-  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
+-  return obj.WebConsoleUtils;
+-});
+-
+-var EXPORTED_SYMBOLS = ["PropertyPanel", "PropertyTreeView"];
+-
+-
+-///////////////////////////////////////////////////////////////////////////
+-//// PropertyTreeView.
+-
+-/**
+- * This is an implementation of the nsITreeView interface. For comments on the
+- * interface properties, see the documentation:
+- * https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsITreeView
+- */
+-var PropertyTreeView = function() {
+-  this._rows = [];
+-};
+-
+-PropertyTreeView.prototype = {
+-  /**
+-   * Stores the visible rows of the tree.
+-   */
+-  _rows: null,
+-
+-  /**
+-   * Stores the nsITreeBoxObject for this tree.
+-   */
+-  _treeBox: null,
+-
+-  /**
+-   * Use this setter to update the content of the tree.
+-   *
+-   * @param object aObject
+-   *        An object that holds information about the object you want to
+-   *        display in the property panel. Object properties:
+-   *        - object:
+-   *        This is the raw object you want to display. You can only provide
+-   *        this object if you want the property panel to work in sync mode.
+-   *        - remoteObject:
+-   *        An array that holds information on the remote object being
+-   *        inspected. Each element in this array describes each property in the
+-   *        remote object. See WebConsoleUtils.namesAndValuesOf() for details.
+-   *        - rootCacheId:
+-   *        The cache ID where the objects referenced in remoteObject are found.
+-   *        - panelCacheId:
+-   *        The cache ID where any object retrieved by this property panel
+-   *        instance should be stored into.
+-   *        - remoteObjectProvider:
+-   *        A function that is invoked when a new object is needed. This is
+-   *        called when the user tries to expand an inspectable property. The
+-   *        callback must take four arguments:
+-   *          - fromCacheId:
+-   *          Tells from where to retrieve the object the user picked (from
+-   *          which cache ID).
+-   *          - objectId:
+-   *          The object ID the user wants.
+-   *          - panelCacheId:
+-   *          Tells in which cache ID to store the objects referenced by
+-   *          objectId so they can be retrieved later.
+-   *          - callback:
+-   *          The callback function to be invoked when the remote object is
+-   *          received. This function takes one argument: the raw message
+-   *          received from the Web Console content script.
+-   */
+-  set data(aData) {
+-    let oldLen = this._rows.length;
+-
+-    this._cleanup();
+-
+-    if (!aData) {
+-      return;
+-    }
+-
+-    if (aData.remoteObject) {
+-      this._rootCacheId = aData.rootCacheId;
+-      this._panelCacheId = aData.panelCacheId;
+-      this._remoteObjectProvider = aData.remoteObjectProvider;
+-      this._rows = [].concat(aData.remoteObject);
+-      this._updateRemoteObject(this._rows, 0);
+-    }
+-    else if (aData.object) {
+-      this._rows = this._inspectObject(aData.object);
+-    }
+-    else {
+-      throw new Error("First argument must have a .remoteObject or " +
+-                      "an .object property!");
+-    }
+-
+-    if (this._treeBox) {
+-      this._treeBox.beginUpdateBatch();
+-      if (oldLen) {
+-        this._treeBox.rowCountChanged(0, -oldLen);
+-      }
+-      this._treeBox.rowCountChanged(0, this._rows.length);
+-      this._treeBox.endUpdateBatch();
+-    }
+-  },
+-
+-  /**
+-   * Update a remote object so it can be used with the tree view. This method
+-   * adds properties to each array element.
+-   *
+-   * @private
+-   * @param array aObject
+-   *        The remote object you want prepared for use with the tree view.
+-   * @param number aLevel
+-   *        The level you want to give to each property in the remote object.
+-   */
+-  _updateRemoteObject: function PTV__updateRemoteObject(aObject, aLevel)
+-  {
+-    aObject.forEach(function(aElement) {
+-      aElement.level = aLevel;
+-      aElement.isOpened = false;
+-      aElement.children = null;
+-    });
+-  },
+-
+-  /**
+-   * Inspect a local object.
+-   *
+-   * @private
+-   * @param object aObject
+-   *        The object you want to inspect.
+-   */
+-  _inspectObject: function PTV__inspectObject(aObject)
+-  {
+-    this._objectCache = {};
+-    this._remoteObjectProvider = this._localObjectProvider.bind(this);
+-    let children = WebConsoleUtils.namesAndValuesOf(aObject, this._objectCache);
+-    this._updateRemoteObject(children, 0);
+-    return children;
+-  },
+-
+-  /**
+-   * An object provider for when the user inspects local objects (not remote
+-   * ones).
+-   *
+-   * @private
+-   * @param string aFromCacheId
+-   *        The cache ID from where to retrieve the desired object.
+-   * @param string aObjectId
+-   *        The ID of the object you want.
+-   * @param string aDestCacheId
+-   *        The ID of the cache where to store any objects referenced by the
+-   *        desired object.
+-   * @param function aCallback
+-   *        The function you want to receive the object.
+-   */
+-  _localObjectProvider:
+-  function PTV__localObjectProvider(aFromCacheId, aObjectId, aDestCacheId,
+-                                    aCallback)
+-  {
+-    let object = WebConsoleUtils.namesAndValuesOf(this._objectCache[aObjectId],
+-                                                  this._objectCache);
+-    aCallback({cacheId: aFromCacheId,
+-               objectId: aObjectId,
+-               object: object,
+-               childrenCacheId: aDestCacheId || aFromCacheId,
+-    });
+-  },
+-
+-  /** nsITreeView interface implementation **/
+-
+-  selection: null,
+-
+-  get rowCount()                     { return this._rows.length; },
+-  setTree: function(treeBox)         { this._treeBox = treeBox;  },
+-  getCellText: function(idx, column) {
+-    let row = this._rows[idx];
+-    return row.name + ": " + row.value;
+-  },
+-  getLevel: function(idx) {
+-    return this._rows[idx].level;
+-  },
+-  isContainer: function(idx) {
+-    return !!this._rows[idx].inspectable;
+-  },
+-  isContainerOpen: function(idx) {
+-    return this._rows[idx].isOpened;
+-  },
+-  isContainerEmpty: function(idx)    { return false; },
+-  isSeparator: function(idx)         { return false; },
+-  isSorted: function()               { return false; },
+-  isEditable: function(idx, column)  { return false; },
+-  isSelectable: function(row, col)   { return true; },
+-
+-  getParentIndex: function(idx)
+-  {
+-    if (this.getLevel(idx) == 0) {
+-      return -1;
+-    }
+-    for (var t = idx - 1; t >= 0; t--) {
+-      if (this.isContainer(t)) {
+-        return t;
+-      }
+-    }
+-    return -1;
+-  },
+-
+-  hasNextSibling: function(idx, after)
+-  {
+-    var thisLevel = this.getLevel(idx);
+-    return this._rows.slice(after + 1).some(function (r) r.level == thisLevel);
+-  },
+-
+-  toggleOpenState: function(idx)
+-  {
+-    let item = this._rows[idx];
+-    if (!item.inspectable) {
+-      return;
+-    }
+-
+-    if (item.isOpened) {
+-      this._treeBox.beginUpdateBatch();
+-      item.isOpened = false;
+-
+-      var thisLevel = item.level;
+-      var t = idx + 1, deleteCount = 0;
+-      while (t < this._rows.length && this.getLevel(t++) > thisLevel) {
+-        deleteCount++;
+-      }
+-
+-      if (deleteCount) {
+-        this._rows.splice(idx + 1, deleteCount);
+-        this._treeBox.rowCountChanged(idx + 1, -deleteCount);
+-      }
+-      this._treeBox.invalidateRow(idx);
+-      this._treeBox.endUpdateBatch();
+-    }
+-    else {
+-      let levelUpdate = true;
+-      let callback = function _onRemoteResponse(aResponse) {
+-        this._treeBox.beginUpdateBatch();
+-        item.isOpened = true;
+-
+-        if (levelUpdate) {
+-          this._updateRemoteObject(aResponse.object, item.level + 1);
+-          item.children = aResponse.object;
+-        }
+-
+-        this._rows.splice.apply(this._rows, [idx + 1, 0].concat(item.children));
+-
+-        this._treeBox.rowCountChanged(idx + 1, item.children.length);
+-        this._treeBox.invalidateRow(idx);
+-        this._treeBox.endUpdateBatch();
+-      }.bind(this);
+-
+-      if (!item.children) {
+-        let fromCacheId = item.level > 0 ? this._panelCacheId :
+-                                           this._rootCacheId;
+-        this._remoteObjectProvider(fromCacheId, item.objectId,
+-                                   this._panelCacheId, callback);
+-      }
+-      else {
+-        levelUpdate = false;
+-        callback({object: item.children});
+-      }
+-    }
+-  },
+-
+-  getImageSrc: function(idx, column) { },
+-  getProgressMode : function(idx,column) { },
+-  getCellValue: function(idx, column) { },
+-  cycleHeader: function(col, elem) { },
+-  selectionChanged: function() { },
+-  cycleCell: function(idx, column) { },
+-  performAction: function(action) { },
+-  performActionOnCell: function(action, index, column) { },
+-  performActionOnRow: function(action, row) { },
+-  getRowProperties: function(idx, column, prop) { },
+-  getCellProperties: function(idx, column, prop) { },
+-  getColumnProperties: function(column, element, prop) { },
+-
+-  setCellValue: function(row, col, value)               { },
+-  setCellText: function(row, col, value)                { },
+-  drop: function(index, orientation, dataTransfer)      { },
+-  canDrop: function(index, orientation, dataTransfer)   { return false; },
+-
+-  _cleanup: function PTV__cleanup()
+-  {
+-    if (this._rows.length) {
+-      // Reset the existing _rows children to the initial state.
+-      this._updateRemoteObject(this._rows, 0);
+-      this._rows = [];
+-    }
+-
+-    delete this._objectCache;
+-    delete this._rootCacheId;
+-    delete this._panelCacheId;
+-    delete this._remoteObjectProvider;
+-  },
+-};
+-
+-///////////////////////////////////////////////////////////////////////////
+-//// Helper for creating the panel.
+-
+-/**
+- * Creates a DOMNode and sets all the attributes of aAttributes on the created
+- * element.
+- *
+- * @param nsIDOMDocument aDocument
+- *        Document to create the new DOMNode.
+- * @param string aTag
+- *        Name of the tag for the DOMNode.
+- * @param object aAttributes
+- *        Attributes set on the created DOMNode.
+- * @returns nsIDOMNode
+- */
+-function createElement(aDocument, aTag, aAttributes)
+-{
+-  let node = aDocument.createElement(aTag);
+-  for (var attr in aAttributes) {
+-    node.setAttribute(attr, aAttributes[attr]);
+-  }
+-  return node;
+-}
+-
+-/**
+- * Creates a new DOMNode and appends it to aParent.
+- *
+- * @param nsIDOMDocument aDocument
+- *        Document to create the new DOMNode.
+- * @param nsIDOMNode aParent
+- *        A parent node to append the created element.
+- * @param string aTag
+- *        Name of the tag for the DOMNode.
+- * @param object aAttributes
+- *        Attributes set on the created DOMNode.
+- * @returns nsIDOMNode
+- */
+-function appendChild(aDocument, aParent, aTag, aAttributes)
+-{
+-  let node = createElement(aDocument, aTag, aAttributes);
+-  aParent.appendChild(node);
+-  return node;
+-}
+-
+-///////////////////////////////////////////////////////////////////////////
+-//// PropertyPanel
+-
+-/**
+- * Creates a new PropertyPanel.
+- *
+- * @see PropertyTreeView
+- * @param nsIDOMNode aParent
+- *        Parent node to append the created panel to.
+- * @param string aTitle
+- *        Title for the panel.
+- * @param string aObject
+- *        Object to display in the tree. For details about this object please
+- *        see the PropertyTreeView constructor in this file.
+- * @param array of objects aButtons
+- *        Array with buttons to display at the bottom of the panel.
+- */
+-function PropertyPanel(aParent, aTitle, aObject, aButtons)
+-{
+-  let document = aParent.ownerDocument;
+-
+-  // Create the underlying panel
+-  this.panel = createElement(document, "panel", {
+-    label: aTitle,
+-    titlebar: "normal",
+-    noautofocus: "true",
+-    noautohide: "true",
+-    close: "true",
+-  });
+-
+-  // Create the tree.
+-  let tree = this.tree = createElement(document, "tree", {
+-    flex: 1,
+-    hidecolumnpicker: "true"
+-  });
+-
+-  let treecols = document.createElement("treecols");
+-  appendChild(document, treecols, "treecol", {
+-    primary: "true",
+-    flex: 1,
+-    hideheader: "true",
+-    ignoreincolumnpicker: "true"
+-  });
+-  tree.appendChild(treecols);
+-
+-  tree.appendChild(document.createElement("treechildren"));
+-  this.panel.appendChild(tree);
+-
+-  // Create the footer.
+-  let footer = createElement(document, "hbox", { align: "end" });
+-  appendChild(document, footer, "spacer", { flex: 1 });
+-
+-  // The footer can have butttons.
+-  let self = this;
+-  if (aButtons) {
+-    aButtons.forEach(function(button) {
+-      let buttonNode = appendChild(document, footer, "button", {
+-        label: button.label,
+-        accesskey: button.accesskey || "",
+-        class: button.class || "",
+-      });
+-      buttonNode.addEventListener("command", button.oncommand, false);
+-    });
+-  }
+-
+-  appendChild(document, footer, "resizer", { dir: "bottomend" });
+-  this.panel.appendChild(footer);
+-
+-  aParent.appendChild(this.panel);
+-
+-  // Create the treeView object.
+-  this.treeView = new PropertyTreeView();
+-  this.treeView.data = aObject;
+-
+-  // Set the treeView object on the tree view. This has to be done *after* the
+-  // panel is shown. This is because the tree binding must be attached first.
+-  this.panel.addEventListener("popupshown", function onPopupShow()
+-  {
+-    self.panel.removeEventListener("popupshown", onPopupShow, false);
+-    self.tree.view = self.treeView;
+-  }, false);
+-
+-  this.panel.addEventListener("popuphidden", function onPopupHide()
+-  {
+-    self.panel.removeEventListener("popuphidden", onPopupHide, false);
+-    self.destroy();
+-  }, false);
+-}
+-
+-/**
+- * Destroy the PropertyPanel. This closes the panel and removes it from the
+- * browser DOM.
+- */
+-PropertyPanel.prototype.destroy = function PP_destroy()
+-{
+-  this.treeView.data = null;
+-  this.panel.parentNode.removeChild(this.panel);
+-  this.treeView = null;
+-  this.panel = null;
+-  this.tree = null;
+-}
+-
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
 --- a/browser/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
