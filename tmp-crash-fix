@@ -1,0 +1,115 @@
+# HG changeset patch
+# Parent 5bdd3a09225fc17485f0f0bdf4ebdf5a78384b8d
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1335437085 -10800
+
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
+@@ -5,24 +5,21 @@
+  *
+  * Contributor(s):
+  *   Mihai Sucan <mihai.sucan@gmail.com>
+  */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-621644-jsterm-dollar.html";
+ 
+ function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++  browser.removeEventListener(aEvent.type, tabLoad, true);
+ 
+-  waitForFocus(function () {
+-    openConsole();
+-
+-    let hudId = HUDService.getHudIdByWindow(content);
+-    let HUD = HUDService.hudReferences[hudId];
+-
++  openConsole(function(HUD) {
++    executeSoon(finishTest);
++    return;
+     HUD.jsterm.clearOutput();
+ 
+     HUD.jsterm.setInputValue("$(document.body)");
+     HUD.jsterm.execute();
+ 
+     let outputItem = HUD.outputNode.
+                      querySelector(".webconsole-msg-output:last-child");
+     ok(outputItem.textContent.indexOf("<p>") > -1,
+@@ -34,17 +31,17 @@ function tabLoad(aEvent) {
+     HUD.jsterm.execute();
+ 
+     outputItem = HUD.outputNode.
+                      querySelector(".webconsole-msg-output:last-child");
+     ok(outputItem.textContent.indexOf("621644") > -1,
+        "jsterm output is correct for $$()");
+ 
+     executeSoon(finishTest);
+-  }, content);
++  });
+ }
+ 
+ registerCleanupFunction(function() {
+   Services.prefs.clearUserPref("devtools.gcli.enable");
+ });
+ 
+ function test() {
+   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -193,24 +193,25 @@ function finishTest()
+   function onWebConsoleClose(aSubject, aTopic)
+   {
+     if (aTopic == "web-console-destroyed") {
+       Services.obs.removeObserver(onWebConsoleClose, "web-console-destroyed");
+       executeSoon(finish);
+     }
+   }
+ 
+-  Services.obs.addObserver(onWebConsoleClose, "web-console-destroyed", false);
+-
+   let hud = HUDService.getHudByWindow(content);
+   if (!hud) {
+-    finish();
++    executeSoon(finish);
+     return;
+   }
+   hud.jsterm.clearOutput(true);
++
++  Services.obs.addObserver(onWebConsoleClose, "web-console-destroyed", false);
++
+   HUDService.deactivateHUDForContext(hud.tab);
+   hud = null;
+ }
+ 
+ function tearDown()
+ {
+   HUDService.deactivateHUDForContext(gBrowser.selectedTab);
+   while (gBrowser.tabs.length > 1) {
+diff --git a/content/base/src/nsFrameMessageManager.cpp b/content/base/src/nsFrameMessageManager.cpp
+--- a/content/base/src/nsFrameMessageManager.cpp
++++ b/content/base/src/nsFrameMessageManager.cpp
+@@ -895,18 +895,21 @@ nsFrameScriptExecutor::InitTabChildGloba
+ }
+ 
+ // static
+ void
+ nsFrameScriptExecutor::Traverse(nsFrameScriptExecutor *tmp,
+                                 nsCycleCollectionTraversalCallback &cb)
+ {
+   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mGlobal)
+-  NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mCx");
+-  nsContentUtils::XPConnect()->NoteJSContext(tmp->mCx, cb);
++  nsIXPConnect* xpc = nsContentUtils::XPConnect();
++  if (xpc) {
++    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mCx");
++    xpc->NoteJSContext(tmp->mCx, cb);
++  }
+ }
+ 
+ NS_IMPL_ISUPPORTS1(nsScriptCacheCleaner, nsIObserver)
+ 
+ nsFrameMessageManager* nsFrameMessageManager::sChildProcessManager = nsnull;
+ nsFrameMessageManager* nsFrameMessageManager::sParentProcessManager = nsnull;
+ nsFrameMessageManager* nsFrameMessageManager::sSameProcessParentManager = nsnull;
+ nsTArray<nsCOMPtr<nsIRunnable> >* nsFrameMessageManager::sPendingSameProcessAsyncMessages = nsnull;

@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 1142d79442d191b42c38232cc6f85ccb255cf94b
+# Parent dd34f440a64d4c5b4d12d66ce0d4559df980048e
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1334770511 -10800
+# Date 1334865336 -10800
 
-Bug 673148 - (async-webconsole) Part 2 - Make script and style errors async
+Bug 673148 - (async-webconsole) Part 2 - Make script and style errors async; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
@@ -135,7 +135,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
  
      messages.sort(function(a, b) { return a.timeStamp - b.timeStamp; });
  
-     Manager.sendMessage("WebConsole:CachedMessages", {messages: messages});
+     this.sendMessage("WebConsole:CachedMessages", {messages: messages});
    },
  
    /**
@@ -267,7 +267,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -1881,18 +1881,16 @@ HUD_SERVICE.prototype =
+@@ -1865,18 +1865,16 @@ HUD_SERVICE.prototype =
      if (Object.keys(this.hudReferences).length > 0) {
        return;
      }
@@ -286,7 +286,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @returns void
     */
-@@ -1907,18 +1905,16 @@ HUD_SERVICE.prototype =
+@@ -1891,18 +1889,16 @@ HUD_SERVICE.prototype =
      this.openRequests = {};
      this.openResponseHeaders = {};
  
@@ -305,7 +305,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @returns void
     */
    shutdown: function HS_shutdown()
-@@ -2015,83 +2011,16 @@ HUD_SERVICE.prototype =
+@@ -1999,83 +1995,16 @@ HUD_SERVICE.prototype =
      let message = stringBundle.GetStringFromName("ConsoleAPIDisabled");
      let node = ConsoleUtils.createMessageNode(chromeDocument, CATEGORY_JS,
                                                SEVERITY_WARNING, message,
@@ -389,7 +389,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    function HS_registerApplications(aAppName, aHooksObject)
    {
      switch(aAppName) {
-@@ -3057,17 +2986,17 @@ HeadsUpDisplay.prototype = {
+@@ -3041,17 +2970,17 @@ HeadsUpDisplay.prototype = {
    /**
     * Message names that the HUD listens for. These messages come from the remote
     * Web Console content script.
@@ -408,7 +408,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    groupDepth: 0,
  
-@@ -3401,52 +3330,40 @@ HeadsUpDisplay.prototype = {
+@@ -3385,52 +3314,40 @@ HeadsUpDisplay.prototype = {
        throw new Error("Unsupported Gecko Application");
      }
    },
@@ -476,7 +476,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Scroll to bottom.
      let numChildren = this.outputNode.childNodes.length;
-@@ -4098,16 +4015,74 @@ HeadsUpDisplay.prototype = {
+@@ -4084,16 +4001,74 @@ HeadsUpDisplay.prototype = {
        tree.view = node.propertyTreeView;
  
        // Make sure the cached evaluated object will be purged when the node is
@@ -551,7 +551,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Setup the message manager used to communicate with the Web Console content
-@@ -4121,18 +4096,18 @@ HeadsUpDisplay.prototype = {
+@@ -4107,18 +4082,18 @@ HeadsUpDisplay.prototype = {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
      this._messageListeners.forEach(function(aName) {
@@ -572,7 +572,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Handler for all of the messages coming from the Web Console content script.
     *
     * @private
-@@ -4149,18 +4124,21 @@ HeadsUpDisplay.prototype = {
+@@ -4135,18 +4110,21 @@ HeadsUpDisplay.prototype = {
  
      switch (aMessage.name) {
        case "JSTerm:EvalObject":
@@ -595,7 +595,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Callback method for when the Web Console initialization is complete. For
     * now this method sends the web-console-created notification using the
-@@ -4302,43 +4280,16 @@ HeadsUpDisplay.prototype = {
+@@ -4288,43 +4266,16 @@ HeadsUpDisplay.prototype = {
      this.positionMenuitems.window.removeEventListener("command",
        this._positionConsoleWindow, false);
  
@@ -639,7 +639,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * @param aDocument The document, the factory is to generate nodes from
   * @return DOM Node Factory function
   */
-@@ -6500,41 +6451,38 @@ ConsoleEntry.prototype = {
+@@ -6486,41 +6437,38 @@ ConsoleEntry.prototype = {
    }
  };
  
@@ -686,7 +686,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  // CommandController
  ///////////////////////////////////////////////////////////////////////////////
  
-@@ -6619,54 +6567,16 @@ CommandController.prototype = {
+@@ -6605,54 +6553,16 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
