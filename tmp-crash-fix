@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 5bdd3a09225fc17485f0f0bdf4ebdf5a78384b8d
+# Parent 77f2ee9025dac77ca839c4c916782f158153f9ab
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1335437085 -10800
+# Date 1335471163 -10800
 
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
@@ -35,7 +35,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jste
      let outputItem = HUD.outputNode.
                       querySelector(".webconsole-msg-output:last-child");
      ok(outputItem.textContent.indexOf("<p>") > -1,
-@@ -34,17 +31,17 @@ function tabLoad(aEvent) {
+@@ -34,15 +31,15 @@ function tabLoad(aEvent) {
      HUD.jsterm.execute();
  
      outputItem = HUD.outputNode.
@@ -48,12 +48,10 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jste
 +  });
  }
  
- registerCleanupFunction(function() {
-   Services.prefs.clearUserPref("devtools.gcli.enable");
- });
- 
  function test() {
-   Services.prefs.setBoolPref("devtools.gcli.enable", false);
+   addTab(TEST_URI);
+   browser.addEventListener("load", tabLoad, true);
+ }
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js

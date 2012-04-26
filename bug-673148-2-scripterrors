@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent dd34f440a64d4c5b4d12d66ce0d4559df980048e
+# Parent c8db4ca48ac22dd8b5824916d147defebbc143c6
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1334865336 -10800
+# Date 1335470794 -10800
 
 Bug 673148 - (async-webconsole) Part 2 - Make script and style errors async; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
 
@@ -267,7 +267,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -1865,18 +1865,16 @@ HUD_SERVICE.prototype =
+@@ -1849,18 +1849,16 @@ HUD_SERVICE.prototype =
      if (Object.keys(this.hudReferences).length > 0) {
        return;
      }
@@ -286,7 +286,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @returns void
     */
-@@ -1891,18 +1889,16 @@ HUD_SERVICE.prototype =
+@@ -1875,18 +1873,16 @@ HUD_SERVICE.prototype =
      this.openRequests = {};
      this.openResponseHeaders = {};
  
@@ -305,7 +305,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @returns void
     */
    shutdown: function HS_shutdown()
-@@ -1999,83 +1995,16 @@ HUD_SERVICE.prototype =
+@@ -1983,83 +1979,16 @@ HUD_SERVICE.prototype =
      let message = stringBundle.GetStringFromName("ConsoleAPIDisabled");
      let node = ConsoleUtils.createMessageNode(chromeDocument, CATEGORY_JS,
                                                SEVERITY_WARNING, message,
@@ -389,7 +389,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    function HS_registerApplications(aAppName, aHooksObject)
    {
      switch(aAppName) {
-@@ -3041,17 +2970,17 @@ HeadsUpDisplay.prototype = {
+@@ -3025,17 +2954,17 @@ HeadsUpDisplay.prototype = {
    /**
     * Message names that the HUD listens for. These messages come from the remote
     * Web Console content script.
@@ -408,7 +408,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    groupDepth: 0,
  
-@@ -3385,52 +3314,40 @@ HeadsUpDisplay.prototype = {
+@@ -3369,52 +3298,40 @@ HeadsUpDisplay.prototype = {
        throw new Error("Unsupported Gecko Application");
      }
    },
@@ -476,7 +476,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Scroll to bottom.
      let numChildren = this.outputNode.childNodes.length;
-@@ -4084,16 +4001,74 @@ HeadsUpDisplay.prototype = {
+@@ -4068,16 +3985,74 @@ HeadsUpDisplay.prototype = {
        tree.view = node.propertyTreeView;
  
        // Make sure the cached evaluated object will be purged when the node is
@@ -551,7 +551,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Setup the message manager used to communicate with the Web Console content
-@@ -4107,18 +4082,18 @@ HeadsUpDisplay.prototype = {
+@@ -4091,18 +4066,18 @@ HeadsUpDisplay.prototype = {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
      this._messageListeners.forEach(function(aName) {
@@ -572,7 +572,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Handler for all of the messages coming from the Web Console content script.
     *
     * @private
-@@ -4135,18 +4110,21 @@ HeadsUpDisplay.prototype = {
+@@ -4119,18 +4094,21 @@ HeadsUpDisplay.prototype = {
  
      switch (aMessage.name) {
        case "JSTerm:EvalObject":
@@ -595,7 +595,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Callback method for when the Web Console initialization is complete. For
     * now this method sends the web-console-created notification using the
-@@ -4288,43 +4266,16 @@ HeadsUpDisplay.prototype = {
+@@ -4272,43 +4250,16 @@ HeadsUpDisplay.prototype = {
      this.positionMenuitems.window.removeEventListener("command",
        this._positionConsoleWindow, false);
  
@@ -639,7 +639,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * @param aDocument The document, the factory is to generate nodes from
   * @return DOM Node Factory function
   */
-@@ -6486,41 +6437,38 @@ ConsoleEntry.prototype = {
+@@ -6480,41 +6431,38 @@ ConsoleEntry.prototype = {
    }
  };
  
@@ -686,7 +686,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  // CommandController
  ///////////////////////////////////////////////////////////////////////////////
  
-@@ -6605,54 +6553,16 @@ CommandController.prototype = {
+@@ -6599,54 +6547,16 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
@@ -824,7 +824,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_580030_erro
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js b/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_582201_duplicate_errors.js
-@@ -77,23 +77,32 @@ var consoleObserver = {
+@@ -72,23 +72,32 @@ var consoleObserver = {
        aMessage.category != "content javascript") {
        return;
      }
@@ -916,7 +916,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_597136_exte
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js b/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js
-@@ -36,38 +36,43 @@ let TestObserver = {
+@@ -34,38 +34,43 @@ let TestObserver = {
      }
      else {
        lastWindowId = aSubject.outerWindowID;
@@ -1106,7 +1106,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618078_netw
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js b/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
-@@ -5,53 +5,61 @@
+@@ -5,48 +5,56 @@
   */
  
  // Tests that the Web Console limits the number of lines displayed according to
@@ -1118,12 +1118,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_
 -var gOldPref, gHudId;
 +var gOldPref;
  
- registerCleanupFunction(function() {
-   Services.prefs.clearUserPref("devtools.gcli.enable");
- });
- 
  function test() {
-   Services.prefs.setBoolPref("devtools.gcli.enable", false);
    addTab("data:text/html;charset=utf-8,Web Console test for bug 644419: Console should " +
           "have user-settable log limits for each message category");
    browser.addEventListener("load", onLoad, true);
@@ -1135,9 +1130,9 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_
  
    openConsole(function(aHud) {
 -    gHudId = aHud.hudId;
+     aHud.jsterm.clearOutput();
 +    hud = aHud;
 +    outputNode = aHud.outputNode;
-     aHud.jsterm.clearOutput();
  
      browser.addEventListener("load", testWebDevLimits, true);
      expectUncaughtException();
@@ -1176,7 +1171,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_
    waitForSuccess({
      name: "11 console.log messages displayed",
      validatorFn: function()
-@@ -71,19 +79,17 @@ function testWebDevLimits(aEvent) {
+@@ -66,19 +74,17 @@ function testWebDevLimits(aEvent) {
      failureFn: testJsLimits,
    });
  }
@@ -1196,7 +1191,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_
      validatorFn: function()
      {
        return outputNode.textContent.indexOf("testing JS limits") > -1;
-@@ -98,36 +104,43 @@ function testJsLimits2() {
+@@ -93,36 +99,43 @@ function testJsLimits2() {
    let head = content.document.getElementsByTagName("head")[0];
    for (let i = 0; i < 11; i++) {
      var script = content.document.createElement("script");
@@ -1249,7 +1244,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_
      validatorFn: function()
      {
        return outputNode.textContent.indexOf("testing Net limits") > -1;
-@@ -162,19 +175,17 @@ function loadImage() {
+@@ -157,19 +170,17 @@ function loadImage() {
    Services.prefs.setIntPref("devtools.hud.loglimit.network", gOldPref);
    testCssLimits();
  }
@@ -1269,7 +1264,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_
      validatorFn: function()
      {
        return outputNode.textContent.indexOf("testing CSS limits") > -1;
-@@ -187,18 +198,29 @@ function testCssLimits() {
+@@ -182,18 +193,29 @@ function testCssLimits() {
  function testCssLimits2() {
    // Fill the log with CSS errors.
    let body = content.document.getElementsByTagName("body")[0];
