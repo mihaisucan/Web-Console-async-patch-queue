@@ -1,12 +1,1314 @@
 # HG changeset patch
-# Parent 77f2ee9025dac77ca839c4c916782f158153f9ab
+# Parent dce42c2b8d5aba638497d059997038b90556bb41
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1335471163 -10800
+# Date 1335990289 -10800
 
+diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
+--- a/browser/devtools/webconsole/HUDService-content.js
++++ b/browser/devtools/webconsole/HUDService-content.js
+@@ -40,41 +40,35 @@
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ "use strict";
+ 
+ // This code is appended to the browser content script.
+-(function(_global) {
+-const Cc = Components.classes;
+-const Ci = Components.interfaces;
+-const Cu = Components.utils;
++(function _hudserviceContent() {
++let Cc = Components.classes;
++let Ci = Components.interfaces;
++let Cu = Components.utils;
+ 
+-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+-Cu.import("resource://gre/modules/Services.jsm");
++let tempScope = {};
++Cu.import("resource://gre/modules/XPCOMUtils.jsm", tempScope);
++Cu.import("resource://gre/modules/Services.jsm", tempScope);
++Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm", tempScope);
++Cu.import("resource:///modules/WebConsoleUtils.jsm", tempScope);
+ 
+-XPCOMUtils.defineLazyGetter(_global, "gConsoleStorage", function () {
+-  let obj = {};
+-  Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm", obj);
+-  return obj.ConsoleAPIStorage;
+-});
++let XPCOMUtils = tempScope.XPCOMUtils;
++let Services = tempScope.Services;
++let gConsoleStorage = tempScope.ConsoleAPIStorage;
++let WebConsoleUtils = tempScope.WebConsoleUtils;
++let l10n = WebConsoleUtils.l10n;
++tempScope = null;
+ 
+-XPCOMUtils.defineLazyGetter(_global, "WebConsoleUtils", function () {
+-  let obj = {};
+-  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
+-  return obj.WebConsoleUtils;
+-});
+-
+-XPCOMUtils.defineLazyGetter(_global, "l10n", function () {
+-  return WebConsoleUtils.l10n;
+-});
+-
+-_global = null;
++let _alive = true;
+ 
+ /**
+  * The Web Console content instance manager.
+  */
+ let Manager = {
+   get "window"() content,
+   get console() this.window.console,
+   sandbox: null,
+@@ -89,36 +83,38 @@ let Manager = {
+    */
+   get sequenceId() "HUDContent-" + (++this._sequence),
+ 
+   /**
+    * Initialize the Web Console manager.
+    */
+   init: function Manager_init()
+   {
++    dump("Manager_init\n");
+     this._enabledFeatures = [];
+     this._messageHandlers = {};
+ 
+-    this._messageListeners.forEach(function(aName) {
++    this._messageListeners.forEach(function _eachListener(aName) {
+       addMessageListener(aName, this);
+     }, this);
+   },
+ 
+   /**
+    * The message handler. This method forwards all the remote messages to the
+    * appropriate code.
+    */
+   receiveMessage: function Manager_receiveMessage(aMessage)
+   {
+     if (!aMessage.json || (aMessage.name != "WebConsole:Init" &&
+                            aMessage.json.hudId != this.hudId)) {
+       Cu.reportError("Web Console content script: received message " +
+                      aMessage.name + " from wrong hudId!");
+       return;
+     }
++    dump("Manager_receiveMessage " + this.hudId + " " + aMessage.name + "\n");
+ 
+     switch (aMessage.name) {
+       case "WebConsole:Init":
+         this._onInit(aMessage.json);
+         break;
+       case "WebConsole:EnableFeature":
+         this.enableFeature(aMessage.json.feature, aMessage.json);
+         break;
+@@ -160,17 +156,17 @@ let Manager = {
+    *          ConsoleAPI: { ... }, // ConsoleAPI-specific options
+    *          cachedMessages: ["ConsoleAPI"],
+    *        }
+    */
+   _onInit: function Manager_onInit(aMessage)
+   {
+     this.hudId = aMessage.hudId;
+     if (aMessage.features) {
+-      aMessage.features.forEach(function(aFeature) {
++      aMessage.features.forEach(function _eachFeature(aFeature) {
+         this.enableFeature(aFeature, aMessage[aFeature]);
+       }, this);
+     }
+ 
+     if (aMessage.cachedMessages) {
+       this._sendCachedMessages(aMessage.cachedMessages);
+     }
+   },
+@@ -184,32 +180,34 @@ let Manager = {
+    * @param function aCallback
+    *        Function to execute when the message is received. This function is
+    *        given the JSON object that came from the remote Web Console
+    *        instance.
+    *        Only one callback per message name is allowed!
+    */
+   addMessageHandler: function Manager_addMessageHandler(aName, aCallback)
+   {
++    dump("Manager_addMessageHandler " + this.hudId + " " + aName + "\n");
+     if (aName in this._messageHandlers) {
+       return;
+     }
+ 
+     this._messageHandlers[aName] = aCallback;
+     addMessageListener(aName, this);
+   },
+ 
+   /**
+    * Remove the message handler for the given name.
+    *
+    * @param string aName
+    *        Message name for the handler you want removed.
+    */
+   removeMessageHandler: function Manager_removeMessageHandler(aName)
+   {
++    dump("Manager_removeMessageHandler " + this.hudId + " " + aName + "\n");
+     if (!(aName in this._messageHandlers)) {
+       return;
+     }
+ 
+     delete this._messageHandlers[aName];
+     removeMessageListener(aName, this);
+   },
+ 
+@@ -218,16 +216,17 @@ let Manager = {
+    *
+    * @param string aName
+    *        The name of the message you want to send.
+    * @param object aMessage
+    *        The message object you want to send.
+    */
+   sendMessage: function Manager_sendMessage(aName, aMessage)
+   {
++    dump("Manager_sendMessage " + this.hudId + " " + aName + "\n");
+     aMessage.hudId = this.hudId;
+     if (!("id" in aMessage)) {
+       aMessage.id = this.sequenceId;
+     }
+ 
+     sendAsyncMessage(aName, aMessage);
+   },
+ 
+@@ -247,16 +246,17 @@ let Manager = {
+    * @param string aFeature
+    *        One of the supported features: JSTerm, ConsoleAPI.
+    * @param object [aMessage]
+    *        Optional JSON message object coming from the remote Web Console
+    *        instance. This can be used for feature-specific options.
+    */
+   enableFeature: function Manager_enableFeature(aFeature, aMessage)
+   {
++    dump("Manager_enableFeature " + this.hudId + " " + aFeature + "\n");
+     if (this._enabledFeatures.indexOf(aFeature) != -1) {
+       return;
+     }
+ 
+     switch (aFeature) {
+       case "JSTerm":
+         JSTerm.init(aMessage);
+         break;
+@@ -279,16 +279,17 @@ let Manager = {
+    *
+    * @see this.enableFeature
+    * @param string aFeature
+    *        One of the supported features - see this.enableFeature() for the
+    *        list of supported features.
+    */
+   disableFeature: function Manager_disableFeature(aFeature)
+   {
++    dump("Manager_disableFeature " + this.hudId + " " + aFeature + "\n");
+     let index = this._enabledFeatures.indexOf(aFeature);
+     if (index == -1) {
+       return;
+     }
+     this._enabledFeatures.splice(index, 1);
+ 
+     switch (aFeature) {
+       case "JSTerm":
+@@ -334,25 +335,32 @@ let Manager = {
+     this.sendMessage("WebConsole:CachedMessages", {messages: messages});
+   },
+ 
+   /**
+    * Destroy the Web Console content script instance.
+    */
+   destroy: function Manager_destroy()
+   {
+-    this._messageListeners.forEach(function(aName) {
++    let hudId = this.hudId;
++    dump("Manager_destroy " + hudId + "\n");
++
++    this._messageListeners.forEach(function _eachListener(aName) {
+       removeMessageListener(aName, this);
+     }, this);
+ 
+     this._enabledFeatures.slice().forEach(this.disableFeature, this);
+ 
++    _alive = false;
+     this.hudId = null;
+     this._messageHandlers = null;
+-    Manager = ConsoleAPIObserver = JSTerm = null;
++    Manager = ConsoleAPIObserver = JSTerm = ConsoleListener = null;
++    Cc = Ci = Cu = XPCOMUtils = Services = gConsoleStorage =
++      WebConsoleUtils = l10n = null;
++    dump("Manager_destroy end " + hudId + "\n");
+   },
+ };
+ 
+ /**
+  * The JavaScript terminal is meant to allow remote code execution for the Web
+  * Console.
+  */
+ let JSTerm = {
+@@ -362,16 +370,17 @@ let JSTerm = {
+    */
+   _objectCache: null,
+ 
+   /**
+    * Initialize the JavaScript terminal feature.
+    */
+   init: function JST_init()
+   {
++    dump("JST_init " + Manager.hudId + "\n");
+     this._objectCache = {};
+ 
+     Manager.addMessageHandler("JSTerm:GetEvalObject",
+                               this.handleGetEvalObject.bind(this));
+     Manager.addMessageHandler("JSTerm:ClearObjectCache",
+                               this.handleClearObjectCache.bind(this));
+   },
+ 
+@@ -418,16 +427,17 @@ let JSTerm = {
+    * remote Web Console instance to clear the cache of objects that it no longer
+    * uses.
+    *
+    * @param object aRequest
+    *        An object that holds one property: the cacheId you want cleared.
+    */
+   handleClearObjectCache: function JST_handleClearObjectCache(aRequest)
+   {
++    dump("JST_handleClearObjectCache " + Manager.hudId + "\n");
+     if (aRequest.cacheId in this._objectCache) {
+       delete this._objectCache[aRequest.cacheId];
+     }
+   },
+ 
+   /**
+    * Prepare an object to be sent to the remote Web Console instance.
+    *
+@@ -456,16 +466,17 @@ let JSTerm = {
+     return result;
+   },
+ 
+   /**
+    * Destroy the JSTerm instance.
+    */
+   destroy: function JST_destroy()
+   {
++    dump("JST_destroy " + Manager.hudId + "\n");
+     Manager.removeMessageHandler("JSTerm:GetEvalObject");
+     Manager.removeMessageHandler("JSTerm:ClearObjectCache");
+ 
+     delete this._objectCache;
+   },
+ };
+ 
+ /**
+@@ -475,16 +486,17 @@ let JSTerm = {
+ let ConsoleAPIObserver = {
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+ 
+   /**
+    * Initialize the window.console API observer.
+    */
+   init: function CAO_init()
+   {
++    dump("CAO_init " + Manager.hudId + "\n");
+     // Note that the observer is process-wide. We will filter the messages as
+     // needed, see CAO_observe().
+     Services.obs.addObserver(this, "console-api-log-event", false);
+ 
+     Manager.addMessageHandler("ConsoleAPI:ClearCache",
+                               this.handleClearCache.bind(this));
+   },
+ 
+@@ -494,19 +506,21 @@ let ConsoleAPIObserver = {
+    *
+    * @param object aMessage
+    *        The message object receives from the observer service.
+    * @param string aTopic
+    *        The message topic received from the observer service.
+    */
+   observe: function CAO_observe(aMessage, aTopic)
+   {
+-    if (!aMessage || aTopic != "console-api-log-event") {
++    if (!_alive || !aMessage || aTopic != "console-api-log-event") {
++      dump("CAO_observe ...\n");
+       return;
+     }
++    dump("CAO_observe " + Manager.hudId + "\n");
+ 
+     let apiMessage = aMessage.wrappedJSObject;
+ 
+     let msgWindow =
+       WebConsoleUtils.getWindowByOuterId(apiMessage.ID, Manager.window);
+     if (!msgWindow || msgWindow.top != Manager.window) {
+       // Not the same window!
+       return;
+@@ -541,17 +555,17 @@ let ConsoleAPIObserver = {
+    *        to the message level. A similar approach is used for
+    *        argumentsToString.
+    */
+   _prepareApiMessageForRemote:
+   function CAO__prepareApiMessageForRemote(aOriginalMessage, aRemoteMessage)
+   {
+     aRemoteMessage.apiMessage =
+       WebConsoleUtils.cloneObject(aOriginalMessage, true,
+-        function(aKey, aValue, aObject) {
++        function _eachKey(aKey, aValue, aObject) {
+           // We need to skip the arguments property from the original object.
+           if (aKey == "wrappedJSObject" || aObject === aOriginalMessage &&
+               aKey == "arguments") {
+             return false;
+           }
+           return true;
+         });
+ 
+@@ -576,17 +590,17 @@ let ConsoleAPIObserver = {
+         aRemoteMessage.argumentsToString =
+           Array.map(aOriginalMessage.arguments || [],
+                     this._formatObject.bind(this));
+         break;
+ 
+       case "dir": {
+         aRemoteMessage.objectsCacheId = Manager.sequenceId;
+         aRemoteMessage.argumentsToString = [];
+-        let mapFunction = function(aItem) {
++        let mapFunction = function _eachArgument(aItem) {
+           aRemoteMessage.argumentsToString.push(this._formatObject(aItem));
+           if (WebConsoleUtils.isObjectInspectable(aItem)) {
+             return JSTerm.prepareObjectForRemote(aItem,
+                                                  aRemoteMessage.objectsCacheId);
+           }
+           return aItem;
+         }.bind(this);
+ 
+@@ -621,20 +635,21 @@ let ConsoleAPIObserver = {
+    *
+    * @see this._prepareApiMessageForRemote()
+    * @return array
+    *         The array of cached messages. Each element is a Console API
+    *         prepared to be sent to the remote Web Console instance.
+    */
+   getCachedMessages: function CAO_getCachedMessages()
+   {
++    dump("CAO_getCachedMessages " + Manager.hudId + "\n");
+     let innerWindowId = WebConsoleUtils.getInnerWindowId(Manager.window);
+     let messages = gConsoleStorage.getEvents(innerWindowId);
+ 
+-    let result = messages.map(function(aMessage) {
++    let result = messages.map(function _eachMessage(aMessage) {
+       let remoteMessage = { _type: "ConsoleAPI" };
+       this._prepareApiMessageForRemote(aMessage.wrappedJSObject, remoteMessage);
+       return remoteMessage;
+     }, this);
+ 
+     return result;
+   },
+ 
+@@ -647,16 +662,17 @@ let ConsoleAPIObserver = {
+     gConsoleStorage.clearEvents(windowId);
+   },
+ 
+   /**
+    * Destroy the ConsoleAPIObserver listeners.
+    */
+   destroy: function CAO_destroy()
+   {
++    dump("CAO_destroy " + Manager.hudId + "\n");
+     Manager.removeMessageHandler("ConsoleAPI:ClearCache");
+     Services.obs.removeObserver(this, "console-api-log-event");
+   },
+ };
+ 
+ /**
+  * The nsIConsoleService listener. This is used to send all the page errors
+  * (JavaScript, CSS and more) to the remote Web Console instance.
+@@ -664,33 +680,36 @@ let ConsoleAPIObserver = {
+ let ConsoleListener = {
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
+ 
+   /**
+    * Initialize the nsIConsoleService listener.
+    */
+   init: function CL_init()
+   {
++    dump("CL_init " + Manager.hudId + "\n");
+     Services.console.registerListener(this);
+   },
+ 
+   /**
+    * The nsIConsoleService observer. This method takes all the script error
+    * messages belonging to the current window and sends them to the remote Web
+    * Console instance.
+    *
+    * @param nsIScriptError aScriptError
+    *        The script error object coming from the nsIConsoleService.
+    */
+   observe: function CL_observe(aScriptError)
+   {
+-    if (!(aScriptError instanceof Ci.nsIScriptError) ||
++    if (!_alive || !(aScriptError instanceof Ci.nsIScriptError) ||
+         !aScriptError.outerWindowID) {
++      dump("CL_observe ...\n");
+       return;
+     }
++    dump("CL_observe " + Manager.hudId + "\n");
+ 
+     switch (aScriptError.category) {
+       // We ignore chrome-originating errors as we only care about content.
+       case "XPConnect JavaScript":
+       case "component javascript":
+       case "chrome javascript":
+       case "chrome registration":
+       case "XBL":
+@@ -715,22 +734,23 @@ let ConsoleListener = {
+    *
+    * @return array
+    *         The array of cached messages. Each element is an nsIScriptError
+    *         with an added _type property so the remote Web Console instance can
+    *         tell the difference between various types of cached messages.
+    */
+   getCachedMessages: function CL_getCachedMessages()
+   {
++    dump("CL_getCachedMessages " + Manager.hudId + "\n");
+     let innerWindowId = WebConsoleUtils.getInnerWindowId(Manager.window);
+     let result = [];
+     let errors = {};
+     Services.console.getMessageArray(errors, {});
+ 
+-    (errors.value || []).forEach(function(aError) {
++    (errors.value || []).forEach(function _eachCachedMessage(aError) {
+       if (!(aError instanceof Ci.nsIScriptError) ||
+           aError.innerWindowID != innerWindowId) {
+         return;
+       }
+ 
+       let remoteMessage = WebConsoleUtils.cloneObject(aError);
+       remoteMessage._type = "PageError";
+       result.push(remoteMessage);
+@@ -739,14 +759,15 @@ let ConsoleListener = {
+     return result;
+   },
+ 
+   /**
+    * Remove the nsIConsoleService listener.
+    */
+   destroy: function CL_destroy()
+   {
++    dump("CL_destroy " + Manager.hudId + "\n");
+     Services.console.unregisterListener(this);
+   },
+ };
+ 
+ Manager.init();
+-})(this);
++})();
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -364,17 +364,17 @@ ResponseListener.prototype =
+   {
+     let httpActivity = this.httpActivity;
+     // Check if the header isn't set yet.
+     if (!httpActivity.response.header) {
+       if (aRequest instanceof Ci.nsIHttpChannel) {
+       httpActivity.response.header = {};
+         try {
+         aRequest.visitResponseHeaders({
+-          visitHeader: function(aName, aValue) {
++          visitHeader: function _visitHeader(aName, aValue) {
+             httpActivity.response.header[aName] = aValue;
+           }
+         });
+       }
+         // Accessing the response header can throw an NS_ERROR_NOT_AVAILABLE
+         // exception. Catch it and stop it to make it not show up in the.
+         // This can happen if the response is not finished yet and the user
+         // reloades the page.
+@@ -521,17 +521,17 @@ ResponseListener.prototype =
+       this.httpActivity.response.body = this.receivedData;
+     }
+ 
+     if (HUDService.lastFinishedRequestCallback) {
+       HUDService.lastFinishedRequestCallback(this.httpActivity);
+     }
+ 
+     // Call update on all panels.
+-    this.httpActivity.panels.forEach(function(weakRef) {
++    this.httpActivity.panels.forEach(function _eachPanelUpdate(weakRef) {
+       let panel = weakRef.get();
+       if (panel) {
+         panel.update();
+       }
+     });
+     this.httpActivity.response.isDone = true;
+     this.httpActivity = null;
+     this.receivedData = "";
+@@ -939,17 +939,17 @@ NetworkPanel.prototype =
+     this._appendList("requestHeadersContent", request.header, true);
+ 
+     if ("Cookie" in request.header) {
+       this._displayNode("requestCookie");
+ 
+       let cookies = request.header.Cookie.split(";");
+       let cookieList = {};
+       let cookieListSorted = {};
+-      cookies.forEach(function(cookie) {
++      cookies.forEach(function _eachCookie(cookie) {
+         let name, value;
+         [name, value] = cookie.trim().split("=");
+         cookieList[name] = value;
+       });
+       this._appendList("requestCookieContent", cookieList);
+     }
+   },
+ 
+@@ -1133,17 +1133,17 @@ NetworkPanel.prototype =
+       Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
+     this._appendTextNode("responseNoBodyInfo",
+       this._format("durationMS", [deltaDuration]));
+   },
+ 
+   /*
+    * Calls the isDoneCallback function if one is specified.
+    */
+-  _callIsDone: function() {
++  _callIsDone: function  NP__callIsDone() {
+     if (this.isDoneCallback) {
+       this.isDoneCallback();
+     }
+   },
+ 
+   /**
+    * Updates the content of the NetworkPanel's iframe.
+    *
+@@ -1212,17 +1212,17 @@ NetworkPanel.prototype =
+           else if (response.body) {
+             this._displayResponseBody();
+             this._callIsDone();
+           }
+           else if (this._isResponseCached) {
+             let self = this;
+             NetworkHelper.loadFromCache(this.httpActivity.url,
+                                         this.httpActivity.charset,
+-                                        function(aContent) {
++                                        function _onLoadFromCache(aContent) {
+               // If some content could be loaded from the cache, then display
+               // the body.
+               if (aContent) {
+                 self._displayResponseBody(aContent);
+                 self._callIsDone();
+               }
+               // Otherwise, show the "There is no response body" hint.
+               else {
+@@ -2136,38 +2136,38 @@ HUD_SERVICE.prototype =
+                       createInstance(Ci.nsIStreamListenerTee);
+ 
+             let originalListener = aChannel.setNewListener(tee);
+ 
+             tee.init(originalListener, sink.outputStream, newListener);
+ 
+             // Copy the request header data.
+             aChannel.visitRequestHeaders({
+-              visitHeader: function(aName, aValue) {
++              visitHeader: function _visitHeader(aName, aValue) {
+                 httpActivity.request.header[aName] = aValue;
+               }
+             });
+ 
+             // Store the loggedNode and the httpActivity object for later reuse.
+             let linkNode = loggedNode.querySelector(".webconsole-msg-link");
+ 
+             httpActivity.messageObject = {
+               messageNode: loggedNode,
+               linkNode:    linkNode
+             };
+             self.openRequests[httpActivity.id] = httpActivity;
+ 
+             // Make the network span clickable.
+             linkNode.setAttribute("aria-haspopup", "true");
+-            linkNode.addEventListener("mousedown", function(aEvent) {
++            linkNode.addEventListener("mousedown", function _mouseDown(aEvent) {
+               this._startX = aEvent.clientX;
+               this._startY = aEvent.clientY;
+             }, false);
+ 
+-            linkNode.addEventListener("click", function(aEvent) {
++            linkNode.addEventListener("click", function _click(aEvent) {
+               if (aEvent.detail != 1 || aEvent.button != 0 ||
+                   (this._startX != aEvent.clientX &&
+                    this._startY != aEvent.clientY)) {
+                 return;
+               }
+ 
+               if (!this._panelOpen) {
+                 self.openNetworkPanel(this, httpActivity);
+@@ -2295,17 +2295,17 @@ HUD_SERVICE.prototype =
+                 delete httpActivity.messageObject;
+                 delete self.openRequests[httpActivity.id];
+                 updatePanel = true;
+                 break;
+               }
+             }
+ 
+             if (updatePanel) {
+-              httpActivity.panels.forEach(function(weakRef) {
++              httpActivity.panels.forEach(function _netPanelUpdate(weakRef) {
+                 let panel = weakRef.get();
+                 if (panel) {
+                   panel.update();
+                 }
+               });
+             }
+           }
+         }
+@@ -2367,17 +2367,17 @@ HUD_SERVICE.prototype =
+       id: HUDService.sequenceId(),
+       hudId: hudId,
+       channel: channel,
+       headers: {},
+     };
+ 
+     try {
+       channel.visitResponseHeaders({
+-        visitHeader: function(aName, aValue) {
++        visitHeader: function _visitHeader(aName, aValue) {
+           response.headers[aName] = aValue;
+         }
+       });
+     }
+     catch (ex) {
+       delete response.headers;
+     }
+ 
+@@ -2979,17 +2979,17 @@ HeadsUpDisplay.prototype = {
+   get tab()
+   {
+     // TODO: we should only keep a reference to the tab object and use
+     // getters to determine the rest of objects we need - the chrome window,
+     // document, etc. We should simplify the entire code to use only a single
+     // tab object ref. See bug 656231.
+     let tab = null;
+     let id = this.notificationBox.id;
+-    Array.some(this.chromeDocument.defaultView.gBrowser.tabs, function(aTab) {
++    Array.some(this.chromeDocument.defaultView.gBrowser.tabs, function _someTab(aTab) {
+       if (aTab.linkedPanel == id) {
+         tab = aTab;
+         return true;
+       }
+     });
+ 
+     return tab;
+   },
+@@ -3314,17 +3314,17 @@ HeadsUpDisplay.prototype = {
+     if (!aRemoteMessages.length) {
+       return;
+     }
+ 
+     // Turn off scrolling for the moment.
+     ConsoleUtils.scroll = false;
+     this.outputNode.hidden = true;
+ 
+-    aRemoteMessages.forEach(function(aMessage) {
++    aRemoteMessages.forEach(function _eachMessage(aMessage) {
+       switch (aMessage._type) {
+         case "PageError":
+           this.reportPageError(aMessage);
+           break;
+         case "ConsoleAPI":
+           this.logConsoleAPIMessage(aMessage);
+           break;
+       }
+@@ -3639,17 +3639,17 @@ HeadsUpDisplay.prototype = {
+    * @param nsIDOMNode aOutputNode
+    *        The console output DOM node.
+    * @returns void
+    */
+   createConsoleMenu: function HUD_createConsoleMenu(aConsoleWrapper) {
+     let menuPopup = this.makeXULNode("menupopup");
+     let id = this.hudId + "-output-contextmenu";
+     menuPopup.setAttribute("id", id);
+-    menuPopup.addEventListener("popupshowing", function() {
++    menuPopup.addEventListener("popupshowing", function _popupShowing() {
+       saveBodiesItem.setAttribute("checked",
+         HUDService.saveRequestAndResponseBodies);
+     }, true);
+ 
+     let saveBodiesItem = this.makeXULNode("menuitem");
+     saveBodiesItem.setAttribute("label", l10n.getStr("saveBodies.label"));
+     saveBodiesItem.setAttribute("accesskey",
+                                  l10n.getStr("saveBodies.accesskey"));
+@@ -3742,17 +3742,17 @@ HeadsUpDisplay.prototype = {
+    *
+    * @param nsIDOMNode aParent
+    *        The toolbar to attach the close button to.
+    * @return void
+    */
+   makeCloseButton: function HUD_makeCloseButton(aToolbar)
+   {
+     this.closeButtonOnCommand = (function HUD_closeButton_onCommand() {
+-      HUDService.animate(this.hudId, ANIMATE_OUT, (function() {
++      HUDService.animate(this.hudId, ANIMATE_OUT, (function _onAnimationEnd() {
+         HUDService.deactivateHUDForContext(this.tab, true);
+       }).bind(this));
+     }).bind(this);
+ 
+     this.closeButton = this.makeXULNode("toolbarbutton");
+     this.closeButton.classList.add("webconsole-close-button");
+     this.closeButton.addEventListener("command",
+       this.closeButtonOnCommand, false);
+@@ -4060,17 +4060,17 @@ HeadsUpDisplay.prototype = {
+    * and initializes the connection to the content script.
+    *
+    * @private
+    */
+   setupMessageManager: function HUD_setupMessageManager()
+   {
+     this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
+ 
+-    this._messageListeners.forEach(function(aName) {
++    this._messageListeners.forEach(function _eachListener(aName) {
+       this.messageManager.addMessageListener(aName, this);
+     }, this);
+ 
+     let message = {
+       hudId: this.hudId,
+       features: ["ConsoleAPI", "JSTerm", "PageError"],
+       cachedMessages: ["ConsoleAPI", "PageError"],
+     };
+@@ -4199,22 +4199,22 @@ HeadsUpDisplay.prototype = {
+     }
+     else {
+       linkNode = aNode.querySelector(".webconsole-msg-body");
+       linkNode.classList.add("hud-clickable");
+     }
+ 
+     linkNode.setAttribute("aria-haspopup", "true");
+ 
+-    aNode.addEventListener("mousedown", function(aEvent) {
++    aNode.addEventListener("mousedown", function _mouseDown(aEvent) {
+       this._startX = aEvent.clientX;
+       this._startY = aEvent.clientY;
+     }, false);
+ 
+-    aNode.addEventListener("click", function(aEvent) {
++    aNode.addEventListener("click", function _click(aEvent) {
+       if (aEvent.detail != 1 || aEvent.button != 0 ||
+           (this._startX != aEvent.clientX &&
+            this._startY != aEvent.clientY)) {
+         return;
+       }
+ 
+       aCallback(this, aEvent);
+     }, false);
+@@ -4223,17 +4223,17 @@ HeadsUpDisplay.prototype = {
+   /**
+    * Destroy the HUD object. Call this method to avoid memory leaks when the Web
+    * Console is closed.
+    */
+   destroy: function HUD_destroy()
+   {
+     this.sendMessageToContent("WebConsole:Destroy", {hudId: this.hudId});
+ 
+-    this._messageListeners.forEach(function(aName) {
++    this._messageListeners.forEach(function _eachListener(aName) {
+       this.messageManager.removeMessageListener(aName, this);
+     }, this);
+ 
+     if (this.jsterm) {
+       this.jsterm.destroy();
+     }
+     if (this.gcliterm) {
+       this.gcliterm.destroy();
+@@ -4584,17 +4584,17 @@ function JSTermHelper(aJSTerm)
+   };
+ 
+   /**
+    * Returns the currently selected object in the highlighter.
+    *
+    * @returns nsIDOMNode or null
+    */
+   Object.defineProperty(aJSTerm.sandbox, "$0", {
+-    get: function() {
++    get: function _$0get() {
+       let mw = HUDService.currentContext();
+       try {
+         return mw.InspectorUI.selection;
+       }
+       catch (ex) {
+         aJSTerm.console.error(ex.message);
+       }
+     },
+@@ -4799,16 +4799,17 @@ function JSTerm(aContext, aParentNode, a
+   this.setTimeout = aParentNode.ownerDocument.defaultView.setTimeout;
+ 
+   let node = aParentNode;
+   while (!node.hasAttribute("id")) {
+     node = node.parentNode;
+   }
+   this.hudId = node.getAttribute("id");
+ 
++  this.history = [];
+   this.historyIndex = 0;
+   this.historyPlaceHolder = 0;  // this.history.length;
+   this.log = LogFactory("*** JSTerm:");
+   this.autocompletePopup = new AutocompletePopup(aParentNode.ownerDocument);
+   this.autocompletePopup.onSelect = this.onAutocompleteSelect.bind(this);
+   this.autocompletePopup.onClick = this.acceptProposedCompletion.bind(this);
+   this.init();
+ }
+@@ -4977,17 +4978,17 @@ JSTerm.prototype = {
+ 
+     // If there is a evalString passed to this function, then add a `Update`
+     // button to the panel so that the evalString can be reexecuted to update
+     // the content of the panel.
+     if (aEvalString !== null) {
+       buttons.push({
+         label: l10n.getStr("update.button"),
+         accesskey: l10n.getStr("update.accesskey"),
+-        oncommand: function () {
++        oncommand: function _onCommand() {
+           try {
+             var result = self.evalInSandbox(aEvalString);
+ 
+             if (result !== undefined) {
+               // TODO: This updates the value of the tree.
+               // However, the states of opened nodes is not saved.
+               // See bug 586246.
+               propPanel.treeView.data = result;
+@@ -5098,23 +5099,23 @@ JSTerm.prototype = {
+                                               this.hudId);
+ 
+     let linkNode = node.querySelector(".webconsole-msg-body");
+ 
+     linkNode.classList.add("hud-clickable");
+     linkNode.setAttribute("aria-haspopup", "true");
+ 
+     // Make the object bring up the property panel.
+-    node.addEventListener("mousedown", function(aEvent) {
++    node.addEventListener("mousedown", function _mouseDown(aEvent) {
+       this._startX = aEvent.clientX;
+       this._startY = aEvent.clientY;
+     }, false);
+ 
+     let self = this;
+-    node.addEventListener("click", function(aEvent) {
++    node.addEventListener("click", function _click(aEvent) {
+       if (aEvent.detail != 1 || aEvent.button != 0 ||
+           (this._startX != aEvent.clientX &&
+            this._startY != aEvent.clientY)) {
+         return;
+       }
+ 
+       if (!this._panelOpen) {
+         let propPanel = self.openPropertyPanel(aEvalString, aOutputObject, this);
+@@ -5420,17 +5421,17 @@ JSTerm.prototype = {
+       return false;
+     }
+ 
+     let multiline = /[\r\n]/.test(node.value);
+     return node.selectionStart == node.value.length ? true :
+            node.selectionStart == 0 && !multiline;
+   },
+ 
+-  history: [],
++  history: null,
+ 
+   // Stores the data for the last completion.
+   lastCompletion: null,
+ 
+   /**
+    * Completes the current typed text in the inputNode. Completion is performed
+    * only if the selection/cursor is at the end of the string. If no completion
+    * is found, the current inputNode value and cursor/selection stay.
+@@ -6022,17 +6023,17 @@ ConsoleUtils = {
+ 
+     // Style appropriately.
+     locationNode.setAttribute("crop", "center");
+     locationNode.setAttribute("title", aSourceURL);
+     locationNode.classList.add("webconsole-location");
+     locationNode.classList.add("text-link");
+ 
+     // Make the location clickable.
+-    locationNode.addEventListener("click", function() {
++    locationNode.addEventListener("click", function _click() {
+       if (aSourceURL == "Scratchpad") {
+         let win = Services.wm.getMostRecentWindow("devtools:scratchpad");
+         if (win) {
+           win.focus();
+         }
+         return;
+       }
+       let viewSourceUtils = aDocument.defaultView.gViewSourceUtils;
+@@ -6263,17 +6264,17 @@ HeadsUpDisplayUICommands = {
+ 
+     if (hudRef && hud) {
+       if (hudRef.consolePanel) {
+         hudRef.consolePanel.hidePopup();
+       }
+       else {
+         HUDService.storeHeight(hudId);
+ 
+-        HUDService.animate(hudId, ANIMATE_OUT, function() {
++        HUDService.animate(hudId, ANIMATE_OUT, function _onAnimationEnd() {
+           // If the user closes the console while the console is animating away,
+           // then these callbacks will queue up, but all the callbacks after the
+           // first will have no console to operate on. This test handles this
+           // case gracefully.
+           if (ownerDocument.getElementById(hudId)) {
+             HUDService.deactivateHUDForContext(gBrowser.selectedTab, true);
+           }
+         });
+@@ -6596,22 +6597,22 @@ ConsoleProgressListener.prototype = {
+     let msgNode = chromeDocument.createElementNS(HTML_NS, "html:span");
+ 
+     // Create the clickable URL part of the message.
+     let linkNode = chromeDocument.createElementNS(HTML_NS, "html:span");
+     linkNode.appendChild(chromeDocument.createTextNode(uri.spec));
+     linkNode.classList.add("hud-clickable");
+     linkNode.classList.add("webconsole-msg-url");
+ 
+-    linkNode.addEventListener("mousedown", function(aEvent) {
++    linkNode.addEventListener("mousedown", function _mousedown(aEvent) {
+       this._startX = aEvent.clientX;
+       this._startY = aEvent.clientY;
+     }, false);
+ 
+-    linkNode.addEventListener("click", function(aEvent) {
++    linkNode.addEventListener("click", function _click(aEvent) {
+       if (aEvent.detail == 1 && aEvent.button == 0 &&
+           this._startX == aEvent.clientX && this._startY == aEvent.clientY) {
+         let viewSourceUtils = chromeDocument.defaultView.gViewSourceUtils;
+         viewSourceUtils.viewSource(uri.spec, null, chromeDocument);
+       }
+     }, false);
+ 
+     msgNode.appendChild(linkNode);
+@@ -6657,17 +6658,17 @@ function appName()
+   let name = APP_ID_TABLE[APP_ID];
+ 
+   if (name){
+     return name;
+   }
+   throw new Error("appName: UNSUPPORTED APPLICATION UUID");
+ }
+ 
+-XPCOMUtils.defineLazyGetter(this, "HUDService", function () {
++XPCOMUtils.defineLazyGetter(this, "HUDService", function _hudservice() {
+   try {
+     return new HUD_SERVICE();
+   }
+   catch (ex) {
+     Cu.reportError(ex);
+   }
+ });
+ 
+@@ -6877,22 +6878,22 @@ GcliTerm.prototype = {
+         output = stringBundle.formatStringFromName('gcliterm.instanceLabel',
+                 formatOpts, formatOpts.length);
+         let linkNode = this.document.createElementNS(HTML_NS, 'html:span');
+         linkNode.appendChild(this.document.createTextNode(output));
+         linkNode.classList.add("hud-clickable");
+         linkNode.setAttribute("aria-haspopup", "true");
+ 
+         // Make the object bring up the property panel.
+-        linkNode.addEventListener("mousedown", function(aEv) {
++        linkNode.addEventListener("mousedown", function _mousedown(aEv) {
+           this._startX = aEv.clientX;
+           this._startY = aEv.clientY;
+         }.bind(this), false);
+ 
+-        linkNode.addEventListener("click", function(aEv) {
++        linkNode.addEventListener("click", function _click(aEv) {
+           if (aEv.detail != 1 || aEv.button != 0 ||
+               (this._startX != aEv.clientX && this._startY != aEv.clientY)) {
+             return;
+           }
+ 
+           if (!this._panelOpen) {
+             let propPanel = this.openPropertyPanel(aEvent.output.typed, aEvent.output.output, this);
+             propPanel.panel.setAttribute("hudId", this.hudId);
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -57,105 +57,109 @@ include $(topsrcdir)/config/rules.mk
+ 	browser_webconsole_bug_580400_groups.js \
+ 	browser_webconsole_bug_588730_text_node_insertion.js \
+ 	browser_webconsole_bug_601667_filter_buttons.js \
+ 	browser_webconsole_bug_597136_external_script_errors.js \
+ 	browser_webconsole_bug_597136_network_requests_from_chrome.js \
+ 	browser_webconsole_completion.js \
+ 	browser_webconsole_console_logging_api.js \
+ 	browser_webconsole_consoleonpage.js \
+-	browser_webconsole_chrome.js \
+ 	browser_webconsole_execution_scope.js \
+ 	browser_webconsole_for_of.js \
+ 	browser_webconsole_history.js \
+ 	browser_webconsole_hud_getters.js \
+ 	browser_webconsole_js_input_and_output_styling.js \
+ 	browser_webconsole_js_input_expansion.js \
+ 	browser_webconsole_live_filtering_of_message_types.js \
+ 	browser_webconsole_live_filtering_on_search_strings.js \
+ 	browser_warn_user_about_replaced_api.js \
+ 	browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js \
+ 	browser_webconsole_bug_586388_select_all.js  \
+ 	browser_webconsole_bug_588967_input_expansion.js \
+ 	browser_webconsole_log_node_classes.js \
+-	browser_webconsole_network_panel.js \
+-	browser_webconsole_jsterm.js \
+ 	browser_webconsole_null_and_undefined_output.js \
+ 	browser_webconsole_output_order.js \
+ 	browser_webconsole_property_panel.js \
+ 	browser_webconsole_property_provider.js \
+ 	browser_webconsole_registries.js \
+ 	browser_webconsole_bug_587617_output_copy.js \
+ 	browser_webconsole_bug_585237_line_limit.js \
+ 	browser_webconsole_bug_581231_close_button.js \
+ 	browser_webconsole_bug_582201_duplicate_errors.js \
+ 	browser_webconsole_bug_580454_timestamp_l10n.js \
+ 	browser_webconsole_netlogging.js \
+ 	browser_webconsole_bug_583816_No_input_and_Tab_key_pressed.js \
+ 	browser_webconsole_bug_594477_clickable_output.js \
+ 	browser_webconsole_bug_589162_css_filter.js \
+ 	browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js \
+-	browser_webconsole_bug_595350_multiple_windows_and_tabs.js \
+ 	browser_webconsole_bug_594497_history_arrow_keys.js \
+ 	browser_webconsole_bug_588342_document_focus.js \
+-	browser_webconsole_bug_595934_message_categories.js \
+ 	browser_webconsole_bug_601352_scroll.js \
+ 	browser_webconsole_bug_592442_closing_brackets.js \
+-	browser_webconsole_bug_593003_iframe_wrong_hud.js \
+ 	browser_webconsole_bug_601909_remember_height.js \
+ 	browser_webconsole_bug_613013_console_api_iframe.js \
+-	browser_webconsole_bug_597756_reopen_closed_tab.js \
+ 	browser_webconsole_bug_600183_charset.js \
+ 	browser_webconsole_bug_601177_log_levels.js \
+ 	browser_webconsole_bug_597460_filter_scroll.js \
+ 	browser_webconsole_console_extras.js \
+ 	browser_webconsole_bug_598357_jsterm_output.js \
+ 	browser_webconsole_bug_603750_websocket.js \
+ 	browser_webconsole_abbreviate_source_url.js \
+ 	browser_webconsole_view_source.js \
+ 	browser_webconsole_bug_602572_log_bodies_checkbox.js \
+ 	browser_webconsole_bug_614793_jsterm_scroll.js \
+ 	browser_webconsole_bug_599725_response_headers.js \
+ 	browser_webconsole_bug_613642_maintain_scroll.js \
+ 	browser_webconsole_bug_613642_prune_scroll.js \
+-	browser_webconsole_bug_618078_network_exceptions.js \
+ 	browser_webconsole_bug_613280_jsterm_copy.js \
+ 	browser_webconsole_bug_630733_response_redirect_headers.js \
+ 	browser_webconsole_bug_621644_jsterm_dollar.js \
+ 	browser_webconsole_bug_632817.js \
+ 	browser_webconsole_bug_611795.js \
+ 	browser_webconsole_bug_618311_close_panels.js \
+-	browser_webconsole_bug_618311_private_browsing.js \
+ 	browser_webconsole_bug_626484_output_copy_order.js \
+ 	browser_webconsole_bug_632347_iterators_generators.js \
+ 	browser_webconsole_bug_642108_pruneTest.js \
+ 	browser_webconsole_bug_585956_console_trace.js \
+ 	browser_webconsole_bug_595223_file_uri.js \
+ 	browser_webconsole_bug_632275_getters_document_width.js \
+ 	browser_webconsole_bug_644419_log_limits.js \
+ 	browser_webconsole_bug_646025_console_file_location.js \
+ 	browser_webconsole_position_ui.js \
+ 	browser_webconsole_bug_642615_autocomplete.js \
+ 	browser_webconsole_bug_585991_autocomplete_popup.js \
+ 	browser_webconsole_bug_585991_autocomplete_keys.js \
+ 	browser_webconsole_bug_663443_panel_title.js \
+ 	browser_webconsole_bug_660806_history_nav.js \
+ 	browser_webconsole_bug_651501_document_body_autocomplete.js \
+-	browser_webconsole_bug_653531_highlighter_console_helper.js \
+ 	browser_webconsole_bug_659907_console_dir.js \
+ 	browser_webconsole_bug_678816.js \
+ 	browser_webconsole_bug_664131_console_group.js \
+ 	browser_webconsole_bug_704295.js \
+ 	browser_webconsole_bug_658368_time_methods.js \
+ 	browser_webconsole_bug_622303_persistent_filters.js \
+ 	browser_webconsole_window_zombie.js \
+ 	browser_cached_messages.js \
+ 	head.js \
+ 	$(NULL)
+ 
++	# browser_webconsole_chrome.js
++	# browser_webconsole_network_panel.js
++	# browser_webconsole_jsterm.js
++	# browser_webconsole_bug_595350_multiple_windows_and_tabs.js
++	# browser_webconsole_bug_595934_message_categories.js
++	# browser_webconsole_bug_593003_iframe_wrong_hud.js
++	# browser_webconsole_bug_597756_reopen_closed_tab.js
++	# *browser_webconsole_bug_602572_log_bodies_checkbox.js
++	# browser_webconsole_bug_618078_network_exceptions.js
++	# browser_webconsole_bug_618311_private_browsing.js
++	# *browser_webconsole_bug_626484_output_copy_order.js
++	# browser_webconsole_bug_653531_highlighter_console_helper.js
++	# *browser_webconsole_bug_658368_time_methods.js
++
+ _BROWSER_TEST_PAGES = \
+ 	test-console.html \
+ 	test-network.html \
+ 	test-network-request.html \
+ 	test-mutation.html \
+ 	testscript.js \
+ 	test-filter.html \
+ 	test-observe-http-ajax.html \
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js b/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
+@@ -11,31 +11,30 @@
+ let menuitems = [], menupopups = [], huds = [], tabs = [];
+ 
+ function test()
+ {
+   // open tab 1
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 602572: log bodies checkbox. tab 1");
+   tabs.push(tab);
+ 
+-  browser.addEventListener("load", function(aEvent) {
+-    browser.removeEventListener(aEvent.type, arguments.callee, true);
++  browser.addEventListener("load", function onLoad1(aEvent) {
++    browser.removeEventListener(aEvent.type, onLoad1, true);
+ 
+-    openConsole();
++    openConsole(function() {
++      // open tab 2
++      addTab("data:text/html;charset=utf-8,Web Console test for bug 602572: log bodies checkbox. tab 2");
++      tabs.push(tab);
+ 
+-    // open tab 2
+-    addTab("data:text/html;charset=utf-8,Web Console test for bug 602572: log bodies checkbox. tab 2");
+-    tabs.push(tab);
++      browser.addEventListener("load", function onLoad2(aEvent) {
++        browser.removeEventListener(aEvent.type, onLoad2, true);
+ 
+-    browser.addEventListener("load", function(aEvent) {
+-      browser.removeEventListener(aEvent.type, arguments.callee, true);
+-
+-      openConsole();
+-      executeSoon(startTest);
+-    }, true);
++        openConsole(startTest);
++      }, true);
++    });
+   }, true);
+ }
+ 
+ function startTest()
+ {
+   // Find the relevant elements in the Web Console of tab 2.
+   let win2 = tabs[1].linkedBrowser.contentWindow;
+   let hudId2 = HUDService.getHudIdByWindow(win2);
+@@ -47,44 +46,44 @@ function startTest()
+ 
+   // Open the context menu from tab 2.
+   menupopups[1].addEventListener("popupshown", onpopupshown2, false);
+   menupopups[1].openPopup(huds[1].outputNode, "overlap", 10, 10, true, false);
+ }
+ 
+ function onpopupshown2(aEvent)
+ {
+-  menupopups[1].removeEventListener(aEvent.type, arguments.callee, false);
++  menupopups[1].removeEventListener(aEvent.type, onpopupshown2, false);
+ 
+   // By default bodies are not logged.
+   isnot(menuitems[1].getAttribute("checked"), "true",
+         "menuitems[1] is not checked");
+ 
+   ok(!HUDService.saveRequestAndResponseBodies, "bodies are not logged");
+ 
+   // Enable body logging.
+   HUDService.saveRequestAndResponseBodies = true;
+ 
+-  menupopups[1].addEventListener("popuphidden", function(aEvent) {
+-    menupopups[1].removeEventListener(aEvent.type, arguments.callee, false);
++  menupopups[1].addEventListener("popuphidden", function _onhidden(aEvent) {
++    menupopups[1].removeEventListener(aEvent.type, _onhidden, false);
+ 
+     // Reopen the context menu.
+     menupopups[1].addEventListener("popupshown", onpopupshown2b, false);
+     menupopups[1].openPopup(huds[1].outputNode, "overlap", 11, 11, true, false);
+   }, false);
+   menupopups[1].hidePopup();
+ }
+ 
+ function onpopupshown2b(aEvent)
+ {
+-  menupopups[1].removeEventListener(aEvent.type, arguments.callee, false);
++  menupopups[1].removeEventListener(aEvent.type, onpopupshown2b, false);
+   is(menuitems[1].getAttribute("checked"), "true", "menuitems[1] is checked");
+ 
+-  menupopups[1].addEventListener("popuphidden", function(aEvent) {
+-    menupopups[1].removeEventListener(aEvent.type, arguments.callee, false);
++  menupopups[1].addEventListener("popuphidden", function _onhidden(aEvent) {
++    menupopups[1].removeEventListener(aEvent.type, _onhidden, false);
+ 
+     // Switch to tab 1 and open the Web Console context menu from there.
+     gBrowser.selectedTab = tabs[0];
+     waitForFocus(function() {
+       // Find the relevant elements in the Web Console of tab 1.
+       let win1 = tabs[0].linkedBrowser.contentWindow;
+       let hudId1 = HUDService.getHudIdByWindow(win1);
+       huds[0] = HUDService.hudReferences[hudId1];
+@@ -97,48 +96,49 @@ function onpopupshown2b(aEvent)
+       menupopups[0].openPopup(huds[0].outputNode, "overlap", 12, 12, true, false);
+     }, tabs[0].linkedBrowser.contentWindow);
+   }, false);
+   menupopups[1].hidePopup();
+ }
+ 
+ function onpopupshown1(aEvent)
+ {
+-  menupopups[0].removeEventListener(aEvent.type, arguments.callee, false);
++  menupopups[0].removeEventListener(aEvent.type, onpopupshown1, false);
+ 
+   // The menuitem checkbox must be in sync with the other tabs.
+   is(menuitems[0].getAttribute("checked"), "true", "menuitems[0] is checked");
+ 
+   // Disable body logging.
+   HUDService.saveRequestAndResponseBodies = false;
+ 
+   // Close the menu, and switch back to tab 2.
+-  menupopups[0].addEventListener("popuphidden", function(aEvent) {
+-    menupopups[0].removeEventListener(aEvent.type, arguments.callee, false);
++  menupopups[0].addEventListener("popuphidden", function _onhidden(aEvent) {
++    menupopups[0].removeEventListener(aEvent.type, _onhidden, false);
+ 
+     gBrowser.selectedTab = tabs[1];
+     waitForFocus(function() {
+       // Reopen the context menu from tab 2.
+       menupopups[1].addEventListener("popupshown", onpopupshown2c, false);
+       menupopups[1].openPopup(huds[1].outputNode, "overlap", 13, 13, true, false);
+     }, tabs[1].linkedBrowser.contentWindow);
+   }, false);
+   menupopups[0].hidePopup();
+ }
+ 
+ function onpopupshown2c(aEvent)
+ {
+-  menupopups[1].removeEventListener(aEvent.type, arguments.callee, false);
++  menupopups[1].removeEventListener(aEvent.type, onpopupshown2c, false);
+ 
+   isnot(menuitems[1].getAttribute("checked"), "true",
+         "menuitems[1] is not checked");
+ 
+-  menupopups[1].addEventListener("popuphidden", function(aEvent) {
+-    menupopups[1].removeEventListener(aEvent.type, arguments.callee, false);
++  menupopups[1].addEventListener("popuphidden", function _onhidden(aEvent) {
++    menupopups[1].removeEventListener(aEvent.type, _onhidden, false);
+ 
+     // Done!
+     huds = menuitems = menupopups = tabs = null;
+-    HUDService.deactivateHUDForContext(gBrowser.selectedTab);
+-    gBrowser.removeCurrentTab();
+-    executeSoon(finishTest);
++    closeConsole(gBrowser.selectedTab, function() {
++      gBrowser.removeCurrentTab();
++      executeSoon(finishTest);
++    });
+   }, false);
+   menupopups[1].hidePopup();
+ }
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
-@@ -5,24 +5,21 @@
+@@ -5,24 +5,19 @@
   *
   * Contributor(s):
   *   Mihai Sucan <mihai.sucan@gmail.com>
@@ -25,8 +1327,6 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jste
 -    let HUD = HUDService.hudReferences[hudId];
 -
 +  openConsole(function(HUD) {
-+    executeSoon(finishTest);
-+    return;
      HUD.jsterm.clearOutput();
  
      HUD.jsterm.setInputValue("$(document.body)");
@@ -35,7 +1335,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jste
      let outputItem = HUD.outputNode.
                       querySelector(".webconsole-msg-output:last-child");
      ok(outputItem.textContent.indexOf("<p>") > -1,
-@@ -34,15 +31,15 @@ function tabLoad(aEvent) {
+@@ -34,15 +29,15 @@ function tabLoad(aEvent) {
      HUD.jsterm.execute();
  
      outputItem = HUD.outputNode.
@@ -52,31 +1352,498 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jste
    addTab(TEST_URI);
    browser.addEventListener("load", tabLoad, true);
  }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js b/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js
+@@ -1,11 +1,11 @@
+ /* Any copyright is dedicated to the Public Domain.
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+-let itemsSet, HUD;
++let itemsSet, HUD, outputNode;
+ 
+ function test() {
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 626484");
+   browser.addEventListener("load", function tabLoaded(aEvent) {
+     browser.removeEventListener(aEvent.type, tabLoaded, true);
+     openConsole(consoleOpened);
+   }, true);
+ }
+@@ -25,26 +25,26 @@ function consoleOpened(aHud) {
+ 
+   waitForSuccess({
+     name: "console.log messages displayed",
+     validatorFn: function()
+     {
+       return outputNode.querySelectorAll(".hud-log").length == 3;
+     },
+     successFn: nextTest,
+-    failureFn: finish,
++    failureFn: finishTest,
+   });
+ }
+ 
+ function nextTest() {
+   if (itemsSet.length === 0) {
+     outputNode.clearSelection();
+     HUD.jsterm.clearOutput();
+-    HUD = null;
+-    finish();
++    HUD = outputNode = null;
++    executeSoon(finishTest);
+   }
+   else {
+     outputNode.clearSelection();
+     let items = itemsSet.shift();
+     items.forEach(function (index) {
+       outputNode.addItemToSelection(outputNode.getItemAtIndex(index));
+     });
+     outputNode.focus();
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js b/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js
+@@ -4,84 +4,85 @@
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  */
+ 
+ // Tests that the Console API implements the time() and timeEnd() methods.
+ 
+ function test() {
+   addTab("http://example.com/browser/browser/devtools/webconsole/" +
+          "test/test-bug-658368-time-methods.html");
+-  openConsole();
+-  browser.addEventListener("load", onLoad, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(consoleOpened);
++  }, true);
+ }
+ 
+-function onLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, onLoad, true);
+-
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let hud = HUDService.hudReferences[hudId];
++function consoleOpened(hud) {
+   outputNode = hud.outputNode;
+ 
+   executeSoon(function() {
+     findLogEntry("aTimer: timer started");
+     findLogEntry("ms");
+ 
+     // The next test makes sure that timers with the same name but in separate
+     // tabs, do not contain the same value.
+     addTab("data:text/html;charset=utf-8,<script type='text/javascript'>" +
+            "console.timeEnd('bTimer');</script>");
+-    openConsole();
+-    browser.addEventListener("load", testTimerIndependenceInTabs, true);
++    browser.addEventListener("load", function onLoad() {
++      browser.removeEventListener("load", onLoad, true);
++      openConsole(testTimerIndependenceInTabs);
++    }, true);
+   });
+ }
+ 
+-function testTimerIndependenceInTabs(aEvent) {
+-  browser.removeEventListener(aEvent.type, testTimerIndependenceInTabs, true);
+-
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let hud = HUDService.hudReferences[hudId];
++function testTimerIndependenceInTabs(hud) {
+   outputNode = hud.outputNode;
+ 
+   executeSoon(function() {
+     testLogEntry(outputNode, "bTimer: timer started", "bTimer was not started",
+                  false, true);
+ 
+     // The next test makes sure that timers with the same name but in separate
+     // pages, do not contain the same value.
+-    browser.addEventListener("load", testTimerIndependenceInSameTab, true);
++    browser.addEventListener("load", function onLoad() {
++      browser.removeEventListener("load", onLoad, true);
++      executeSoon(testTimerIndependenceInSameTab);
++    }, true);
+     content.location = "data:text/html;charset=utf-8,<script type='text/javascript'>" +
+            "console.time('bTimer');</script>";
+   });
+ }
+ 
+-function testTimerIndependenceInSameTab(aEvent) {
+-  browser.removeEventListener(aEvent.type, testTimerIndependenceInSameTab, true);
+-
++function testTimerIndependenceInSameTab() {
+   let hudId = HUDService.getHudIdByWindow(content);
+   let hud = HUDService.hudReferences[hudId];
+   outputNode = hud.outputNode;
+ 
+   executeSoon(function() {
+     findLogEntry("bTimer: timer started");
+     hud.jsterm.clearOutput();
+ 
+     // Now the following console.timeEnd() call shouldn't display anything,
+     // if the timers in different pages are not related.
+-    browser.addEventListener("load", testTimerIndependenceInSameTabAgain, true);
++    browser.addEventListener("load", function onLoad() {
++      browser.removeEventListener("load", onLoad, true);
++      executeSoon(testTimerIndependenceInSameTabAgain);
++    }, true);
+     content.location = "data:text/html;charset=utf-8,<script type='text/javascript'>" +
+            "console.timeEnd('bTimer');</script>";
+   });
+ }
+ 
+-function testTimerIndependenceInSameTabAgain(aEvent) {
+-  browser.removeEventListener(aEvent.type, testTimerIndependenceInSameTabAgain, true);
+-
++function testTimerIndependenceInSameTabAgain(hud) {
+   let hudId = HUDService.getHudIdByWindow(content);
+   let hud = HUDService.hudReferences[hudId];
+   outputNode = hud.outputNode;
+ 
+   executeSoon(function() {
+     testLogEntry(outputNode, "bTimer: timer started", "bTimer was not started",
+                  false, true);
+ 
+-    finishTest();
++    closeConsole(gBrowser.selectedTab, function() {
++      gBrowser.removeCurrentTab();
++      executeSoon(finishTest);
++    });
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_chrome.js b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_chrome.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
+@@ -36,37 +36,38 @@
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that code completion works properly.
+ 
+ function test() {
++  // browser.xul throws when loaded in a tab.
++  expectUncaughtException();
++
+   addTab(getBrowserURL());
+-  browser.addEventListener("DOMContentLoaded", testChrome, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(testChrome);
++  }, true);
+ }
+ 
+-function testChrome() {
+-  browser.removeEventListener("DOMContentLoaded", testChrome, false);
+-
+-  openConsole();
+-
+-  let hud = HUDService.getHudByWindow(content);
++function testChrome(hud) {
+   ok(hud, "we have a console");
+   
+   ok(hud.HUDBox, "we have the console display");
+ 
+   let jsterm = hud.jsterm;
+   ok(jsterm, "we have a jsterm");
+ 
+   let input = jsterm.inputNode;
+   ok(hud.outputNode, "we have an output node");
+ 
+   // Test typing 'docu'.
+   input.value = "docu";
+   input.setSelectionRange(4, 4);
+   jsterm.complete(jsterm.COMPLETE_HINT_ONLY);
+   is(jsterm.completeNode.value, "    ment", "'docu' completion");
+ 
+-  finish();
++  executeSoon(finish);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
+@@ -39,37 +39,32 @@
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that commands run by the user are executed in content space.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testExecutionScope, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(testExecutionScope);
++  }, true);
+ }
+ 
+-function testExecutionScope() {
+-  browser.removeEventListener("DOMContentLoaded", testExecutionScope,
+-                              false);
+-
+-  openConsole();
+-
+-  let jsterm = HUDService.getHudByWindow(content).jsterm;
++function testExecutionScope(hud) {
++  let jsterm = hud.jsterm;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("location;");
+ 
+   let nodes = jsterm.outputNode.querySelectorAll(".hud-msg-node");
+   is(nodes.length, 2, "Two children in output");
+ 
+   is(/location;/.test(nodes[0].textContent), true,
+      "'location;' written to output");
+ 
+   ok(nodes[0].textContent.indexOf(TEST_URI),
+     "command was executed in the window scope");
+ 
+-  jsterm.clearOutput();
+-  jsterm.history.splice(0, jsterm.history.length);   // workaround for bug 592552
+-
+-  finishTest();
++  executeSoon(finishTest);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_history.js b/browser/devtools/webconsole/test/browser_webconsole_history.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_history.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_history.js
+@@ -43,25 +43,24 @@
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+ // Constants used for defining the direction of JSTerm input history navigation.
+ const HISTORY_BACK = -1;
+ const HISTORY_FORWARD = 1;
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testHistory, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(testHistory);
++  }, true);
+ }
+ 
+-function testHistory() {
+-  browser.removeEventListener("DOMContentLoaded", testHistory, false);
+-
+-  openConsole();
+-
+-  let jsterm = HUDService.getHudByWindow(content).jsterm;
++function testHistory(hud) {
++  let jsterm = hud.jsterm;
+   let input = jsterm.inputNode;
+ 
+   let executeList = ["document", "window", "window.location"];
+ 
+   for each (var item in executeList) {
+     input.value = item;
+     jsterm.execute();
+   }
+@@ -72,17 +71,16 @@ function testHistory() {
+   }
+ 
+   jsterm.historyPeruse(HISTORY_BACK);
+   is (input.value, executeList[0], "test that item is still index 0");
+ 
+   jsterm.historyPeruse(HISTORY_BACK);
+   is (input.value, executeList[0], "test that item is still still index 0");
+ 
+-
+   for (var i = 1; i < executeList.length; i++) {
+     jsterm.historyPeruse(HISTORY_FORWARD);
+     is (input.value, executeList[i], "check history next idx:" + i);
+   }
+ 
+   jsterm.historyPeruse(HISTORY_FORWARD);
+   is (input.value, "", "check input is empty again");
+ 
+@@ -93,14 +91,11 @@ function testHistory() {
+   jsterm.historyPeruse(HISTORY_FORWARD);
+ 
+   is (input.value, "", "check input is still empty");
+ 
+   let idxLast = executeList.length - 1;
+   jsterm.historyPeruse(HISTORY_BACK);
+   is (input.value, executeList[idxLast], "check history next idx:" + idxLast);
+ 
+-  jsterm.clearOutput();
+-  jsterm.history.splice(0, jsterm.history.length);   // workaround for bug 592552
+-
+-  finishTest();
++  executeSoon(finishTest);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_window_zombie.js b/browser/devtools/webconsole/test/browser_webconsole_window_zombie.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_window_zombie.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_window_zombie.js
+@@ -2,43 +2,43 @@
+ /* Any copyright is dedicated to the Public Domain.
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ const TEST_URI = "data:text/html;charset=utf-8,<p>test for bug 577721";
+ 
+ const POSITION_PREF = "devtools.webconsole.position";
+ 
+ function test() {
++  omgLastTest = true;
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", onLoad, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(consoleOpened);
++  }, true);
+   registerCleanupFunction(testEnd);
+ }
+ 
+ function testEnd() {
+   Services.prefs.clearUserPref(POSITION_PREF);
+ }
+ 
+-function onLoad() {
+-  browser.removeEventListener("DOMContentLoaded", onLoad, false);
+-
+-  openConsole();
+-
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let hudRef = HUDService.hudReferences[hudId];
++function consoleOpened(hudRef) {
+   let hudBox = hudRef.HUDBox;
++  dump("consoleOpened\n");
+ 
+   // listen for the panel popupshown event.
+   document.addEventListener("popupshown", function popupShown() {
+     document.removeEventListener("popupshown", popupShown, false);
+ 
+     ok(hudRef.consolePanel, "console is in a panel");
+ 
+     document.addEventListener("popuphidden", function popupHidden() {
+       document.removeEventListener("popuphidden", popupHidden, false);
+-      finishTest();
++      dump("popuphidden\n");
++      executeSoon(finishTest);
+     }, false);
+ 
+     // Close the window console via the menu item
+     let menu = document.getElementById("webConsole");
+     menu.click();
+   }, false);
+ 
+   hudRef.positionConsole("window");
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
-@@ -193,24 +193,25 @@ function finishTest()
-   function onWebConsoleClose(aSubject, aTopic)
-   {
-     if (aTopic == "web-console-destroyed") {
-       Services.obs.removeObserver(onWebConsoleClose, "web-console-destroyed");
-       executeSoon(finish);
-     }
+@@ -38,16 +38,18 @@
+ 
+ let tempScope = {};
+ Cu.import("resource:///modules/HUDService.jsm", tempScope);
+ let HUDService = tempScope.HUDService;
+ let ConsoleUtils = tempScope.ConsoleUtils;
+ Cu.import("resource:///modules/WebConsoleUtils.jsm", tempScope);
+ let WebConsoleUtils = tempScope.WebConsoleUtils;
+ 
++let omgLastTest = false;
++
+ function log(aMsg)
+ {
+   dump("*** WebConsoleTest: " + aMsg + "\n");
+ }
+ 
+ function pprint(aObj)
+ {
+   for (let prop in aObj) {
+@@ -176,42 +178,82 @@ function openConsole(aCallback)
+ 
+   if (aCallback) {
+     Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
    }
  
--  Services.obs.addObserver(onWebConsoleClose, "web-console-destroyed", false);
+   HUDService.activateHUDForContext(tab);
+ }
+ 
+-function closeConsole()
++function closeConsole(aTab, aCallback)
+ {
+-  HUDService.deactivateHUDForContext(tab);
++  dump("closeConsole\n");
++  function onWebConsoleClose(aSubject, aTopic)
++  {
++    if (aTopic == "web-console-destroyed") {
++      Services.obs.removeObserver(onWebConsoleClose, "web-console-destroyed");
++      aSubject.QueryInterface(Ci.nsISupportsString);
++      let hudId = aSubject.data;
++      dump("onWebConsoleClose " + hudId + "\n");
++      executeSoon(aCallback.bind(null, hudId));
++    }
++  }
++
++  if (aCallback) {
++    Services.obs.addObserver(onWebConsoleClose, "web-console-destroyed", false);
++  }
++
++  HUDService.deactivateHUDForContext(aTab || tab);
++}
++
++function call_ccdump()
++{
++  dump("call_ccdump\n");
++  let scope = {};
++  let ccdump_path = "file:///home/mihai/src/ccdump";
++  Services.scriptloader.loadSubScript(ccdump_path + "/simple-wrapper.js", scope);
++  let ccdump = new scope.ccdump_wrapper({
++    global: scope,
++    ccdump_path: ccdump_path,
++  });
++  ccdump.save("/home/mihai/Desktop/ccdump-dbg-memleaks-" + Date.now(),
++    function _onCcdumpSave() {
++      dump("_onCcdumpSave!!!\n");
++      ccdump.clear();
++      ccdump = scope = null;
++      executeSoon(finish);
++    });
+ }
+ 
+ function finishTest()
+ {
+   browser = hudId = hud = filterBox = outputNode = cs = null;
 -
+-  function onWebConsoleClose(aSubject, aTopic)
+-  {
+-    if (aTopic == "web-console-destroyed") {
+-      Services.obs.removeObserver(onWebConsoleClose, "web-console-destroyed");
+-      executeSoon(finish);
+-    }
+-  }
+-
+-  Services.obs.addObserver(onWebConsoleClose, "web-console-destroyed", false);
++  dump("finishTest\n");
+ 
    let hud = HUDService.getHudByWindow(content);
    if (!hud) {
 -    finish();
-+    executeSoon(finish);
++    dump("finishTest no hud\n");
++    if (omgLastTest) {
++      executeSoon(call_ccdump);
++    } else {
++      executeSoon(finish);
++    }
      return;
    }
    hud.jsterm.clearOutput(true);
+-  HUDService.deactivateHUDForContext(hud.tab);
 +
-+  Services.obs.addObserver(onWebConsoleClose, "web-console-destroyed", false);
++  closeConsole(hud.tab, function() {
++    dump("finishTest console closed " + omgLastTest + "\n");
++    if (omgLastTest) {
++      executeSoon(call_ccdump);
++    } else {
++      executeSoon(finish);
++    }
++  });
 +
-   HUDService.deactivateHUDForContext(hud.tab);
    hud = null;
  }
  
@@ -84,6 +1851,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
  {
    HUDService.deactivateHUDForContext(gBrowser.selectedTab);
    while (gBrowser.tabs.length > 1) {
+     gBrowser.removeCurrentTab();
 diff --git a/content/base/src/nsFrameMessageManager.cpp b/content/base/src/nsFrameMessageManager.cpp
 --- a/content/base/src/nsFrameMessageManager.cpp
 +++ b/content/base/src/nsFrameMessageManager.cpp
