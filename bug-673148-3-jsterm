@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent 889abde02d3de6f2317c1c24dc7f8fd02f0e2793
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1336504814 -10800
+# Date 1336507703 -10800
 
 Bug 673148 - (async-webconsole) Part 3 - Make JS evaluation and object inspection async
 
@@ -103,7 +103,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
  
      this._messageListeners.forEach(function(aName) {
        removeMessageListener(aName, this);
-@@ -423,37 +428,364 @@ let Manager = {
+@@ -423,37 +428,310 @@ let Manager = {
      this._messageHandlers = null;
      Manager = ConsoleAPIObserver = JSTerm = ConsoleListener = null;
      Cc = Ci = Cu = XPCOMUtils = Services = gConsoleStorage =
@@ -231,8 +231,6 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    let arrValues = [];
 +    let obj = WebConsoleUtils.unwrap(aObject);
 +
-+    // FIXME: isn't this a security issue? we can execute non-native getters
-+    // here.
 +    try {
 +      for (let prop in obj) {
 +        arrValues.push(obj[prop]);
@@ -264,74 +262,22 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +   */
 +  aJSTerm.sandbox.inspect = function JSTH_inspect(aObject)
 +  {
-+    if (!WebConsoleUtils.isResultInspectable(aObject)) {
++    if (!WebConsoleUtils.isObjectInspectable(aObject)) {
 +      return aObject;
 +    }
 +
 +    aJSTerm.helperEvaluated = true;
 +
 +    let message = {
-+      hudId: aJSTerm.hudId,
-+      id: aJSTerm.sequenceId,
 +      input: aJSTerm._evalInput,
 +      objectCacheId: aJSTerm.sequenceId,
 +    };
 +
 +    message.resultObject =
-+      aJSTerm.prepareEvalResultObject(message.objectCacheId,
-+                                      WebConsoleUtils.unwrap(aObject));
++      aJSTerm.prepareObjectForRemote(WebConsoleUtils.unwrap(aObject),
++                                     message.objectCacheId);
 +
-+    sendAsyncMessage("JSTerm:InspectObject", message);
-+  };
-+
-+  aJSTerm.sandbox.inspectrules = function JSTH_inspectrules(aNode)
-+  {
-+    return "UNIMPLEMENTED";
-+
-+    // TODO: this needs e10s support in the CssRuleView code.
-+
-+    aJSTerm.helperEvaluated = true;
-+    let doc = aJSTerm.parentNode.ownerDocument;
-+    let win = doc.defaultView;
-+    let panel = createElement(doc, "panel", {
-+      label: "CSS Rules",
-+      titlebar: "normal",
-+      noautofocus: "true",
-+      noautohide: "true",
-+      close: "true",
-+      width: 350,
-+      height: (win.screen.height / 2)
-+    });
-+
-+    let iframe = createAndAppendElement(panel, "iframe", {
-+      src: "chrome://browser/content/devtools/cssruleview.xhtml",
-+      flex: "1",
-+    });
-+
-+    panel.addEventListener("load", function onLoad() {
-+      panel.removeEventListener("load", onLoad, true);
-+      let doc = iframe.contentDocument;
-+      let view = new CssRuleView(doc);
-+      let body = doc.getElementById("ruleview-body");
-+      body.appendChild(view.element);
-+      view.highlight(aNode);
-+    }, true);
-+
-+    let parent = doc.getElementById("mainPopupSet");
-+    parent.appendChild(panel);
-+
-+    panel.addEventListener("popuphidden", function onHide() {
-+      panel.removeEventListener("popuphidden", onHide);
-+      parent.removeChild(panel);
-+    });
-+
-+    let footer = createElement(doc, "hbox", { align: "end" });
-+    createAndAppendElement(footer, "spacer", { flex: 1});
-+    createAndAppendElement(footer, "resizer", { dir: "bottomend" });
-+    panel.appendChild(footer);
-+
-+    let anchor = win.gBrowser.selectedBrowser;
-+    panel.openPopup(anchor, "end_before", 0, 0, false, false);
++    Manager.sendMessage("JSTerm:InspectObject", message);
 +  };
 +
 +  /**
@@ -376,7 +322,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +  {
 +    aJSTerm.helperEvaluated = true;
 +    aJSTerm.helperRawOutput = true;
-+    return aString + "";
++    return String(aString);
 +  };
 +}
 +
@@ -472,7 +418,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
     *
     * @param object aRequest
     *        The message that requests the content object. Properties: cacheId,
-@@ -514,37 +846,105 @@ let JSTerm = {
+@@ -514,37 +792,105 @@ let JSTerm = {
     *        given object may include references to other objects - those
     *        references will be stored in the given cache ID so the remote
     *        process can later retrieve them as well.
@@ -959,7 +905,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +        this.jsterm.clearOutput();
 +        break;
 +      case "JSTerm:InspectObject":
-+        this.handleInspectObject(aMessage.json);
++        this.jsterm.handleInspectObject(aMessage.json);
 +        break;
        case "WebConsole:ConsoleAPI":
          this.logConsoleAPIMessage(aMessage.json);
@@ -2229,7 +2175,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    let propPanel = this.openPropertyPanel(options);
 +    propPanel.panel.setAttribute("hudId", this.hudId);
 +
-+    let onPopupHide = function() {
++    let onPopupHide = function JST__onPopupHide() {
 +      propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
 +
 +      this.clearObjectCache(options.data.panelCacheId);
