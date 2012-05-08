@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 00d52d8207e7bfd8fa641f01eb1b0db212456954
+# Parent 889abde02d3de6f2317c1c24dc7f8fd02f0e2793
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1336395284 -10800
+# Date 1336504814 -10800
 
 Bug 673148 - (async-webconsole) Part 3 - Make JS evaluation and object inspection async
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -56,16 +56,17 @@ Cu.import("resource://gre/modules/Servic
+@@ -56,26 +56,26 @@ Cu.import("resource://gre/modules/Servic
  Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm", tempScope);
  Cu.import("resource:///modules/WebConsoleUtils.jsm", tempScope);
  
@@ -17,7 +17,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
  let gConsoleStorage = tempScope.ConsoleAPIStorage;
  let WebConsoleUtils = tempScope.WebConsoleUtils;
  let l10n = WebConsoleUtils.l10n;
-+let JSPropertyProvider = WebConsoleUtils.JSPropertyProvider;
++let JSPropertyProvider = tempScope.JSPropertyProvider;
  tempScope = null;
  
  let _alive = true; // Track if this content script should still be alive.
@@ -26,7 +26,84 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
   * The Web Console content instance manager.
   */
  let Manager = {
-@@ -423,37 +424,359 @@ let Manager = {
+   get "window"() content,
+-  get console() this.window.console,
+   sandbox: null,
+   hudId: null,
+   _sequence: 0,
+   _messageListeners: ["WebConsole:Init", "WebConsole:Destroy"],
+   _messageHandlers: null,
+   _enabledFeatures: null,
+ 
+   /**
+@@ -92,21 +92,17 @@ let Manager = {
+     this._messageHandlers = {};
+ 
+     this._messageListeners.forEach(function(aName) {
+       addMessageListener(aName, this);
+     }, this);
+ 
+     // Need to track the owner XUL window to listen to the unload and TabClose
+     // events, to avoid memory leaks.
+-    let xulWindow = this.window.QueryInterface(Ci.nsIInterfaceRequestor)
+-                    .getInterface(Ci.nsIWebNavigation)
+-                    .QueryInterface(Ci.nsIDocShell)
+-                    .chromeEventHandler.ownerDocument.defaultView;
+-
++    let xulWindow = this._xulWindow();
+     xulWindow.addEventListener("unload", this._onXULWindowClose, false);
+ 
+     let tabContainer = xulWindow.gBrowser.tabContainer;
+     tabContainer.addEventListener("TabClose", this._onTabClose, false);
+ 
+     // Need to track private browsing change and quit application notifications,
+     // again to avoid memory leaks. The Web Console main process cannot notify
+     // this content script when the XUL window close, tab close, private
+@@ -389,29 +385,38 @@ let Manager = {
+   {
+     let tab = aEvent.target;
+     if (_alive && tab.linkedBrowser.contentWindow === Manager.window) {
+       Manager.destroy();
+     }
+   },
+ 
+   /**
++   * Find the XUL window that owns the content script.
++   * @private
++   * @return Window
++   *         The XUL window that owns the content script.
++   */
++  _xulWindow: function Manager__xulWindow()
++  {
++    return this.window.QueryInterface(Ci.nsIInterfaceRequestor)
++           .getInterface(Ci.nsIWebNavigation).QueryInterface(Ci.nsIDocShell)
++           .chromeEventHandler.ownerDocument.defaultView;
++  },
++
++  /**
+    * Destroy the Web Console content script instance.
+    */
+   destroy: function Manager_destroy()
+   {
+     Services.obs.removeObserver(this, "private-browsing-change-granted");
+     Services.obs.removeObserver(this, "quit-application-granted");
+ 
+     _alive = false;
+-    let xulWindow = this.window.QueryInterface(Ci.nsIInterfaceRequestor)
+-                    .getInterface(Ci.nsIWebNavigation)
+-                    .QueryInterface(Ci.nsIDocShell)
+-                    .chromeEventHandler.ownerDocument.defaultView;
+-
++    let xulWindow = this._xulWindow();
+     xulWindow.removeEventListener("unload", this._onXULWindowClose, false);
+     let tabContainer = xulWindow.gBrowser.tabContainer;
+     tabContainer.removeEventListener("TabClose", this._onTabClose, false);
+ 
+     let hudId = this.hudId;
+ 
+     this._messageListeners.forEach(function(aName) {
+       removeMessageListener(aName, this);
+@@ -423,37 +428,364 @@ let Manager = {
      this._messageHandlers = null;
      Manager = ConsoleAPIObserver = JSTerm = ConsoleListener = null;
      Cc = Ci = Cu = XPCOMUtils = Services = gConsoleStorage =
@@ -102,15 +179,16 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +  /**
 +   * Returns the currently selected object in the highlighter.
 +   *
++   * Warning: this implementation crosses the process boundaries! This is not
++   * usable within a remote browser. To implement this feature correctly we need
++   * support for remote inspection capabilities within the Inspector as well.
++   *
 +   * @returns nsIDOMNode or null
 +   */
 +  Object.defineProperty(aJSTerm.sandbox, "$0", {
 +    get: function() {
-+      // TODO: this needs e10s support in the Inspector.
-+      return "UNIMPLEMENTED!!!";
-+      let mw = HUDService.currentContext();
 +      try {
-+        return mw.InspectorUI.selection;
++        return Manager._xulWindow().InspectorUI.selection;
 +      }
 +      catch (ex) {
 +        aJSTerm.console.error(ex.message);
@@ -126,7 +204,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +  aJSTerm.sandbox.clear = function JSTH_clear()
 +  {
 +    aJSTerm.helperEvaluated = true;
-+    sendAsyncMessage("JSTerm:ClearOutput", {hudId: aJSTerm.hudId});
++    Manager.sendMessage("JSTerm:ClearOutput", {});
 +  };
 +
 +  /**
@@ -307,6 +385,9 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
   * Console.
   */
  let JSTerm = {
++  get "window"() Manager.window,
++  get console() this.window.console,
++
 +  sandbox: null,
 +  _messageHandlers: {},
 +
@@ -373,6 +454,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +      errorMessage: error ? error.toString() : null,
 +      inspectable: inspectable,
 +      helperResult: this.helperEvaluated,
++      helperRawOutput: this.helperRawOutput,
 +    };
 +
 +    if (inspectable) {
@@ -390,7 +472,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
     *
     * @param object aRequest
     *        The message that requests the content object. Properties: cacheId,
-@@ -514,37 +837,105 @@ let JSTerm = {
+@@ -514,37 +846,105 @@ let JSTerm = {
     *        given object may include references to other objects - those
     *        references will be stored in the given cache ID so the remote
     *        process can later retrieve them as well.
@@ -747,7 +829,40 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    onTabClose: function HS_onTabClose(aEvent)
    {
-@@ -2957,17 +2882,19 @@ HeadsUpDisplay.prototype = {
+@@ -2929,27 +2854,22 @@ function HeadsUpDisplay(aConfig)
+   // content process.
+   this.asyncRequests = {};
+ 
+   // create a panel dynamically and attach to the parentNode
+   this.createHUD();
+ 
+   this.HUDBox.lastTimestamp = 0;
+   // create the JSTerm input element
+-  try {
+-    this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
+-    if (this.jsterm) {
+-      this.jsterm.inputNode.focus();
+-    }
+-    if (this.gcliterm) {
+-      this.gcliterm.inputNode.focus();
+-    }
++  this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
++  if (this.jsterm) {
++    this.jsterm.inputNode.focus();
+   }
+-  catch (ex) {
+-    Cu.reportError(ex);
++  if (this.gcliterm) {
++    this.gcliterm.inputNode.focus();
+   }
+ 
+   // A cache for tracking repeated CSS Nodes.
+   this.cssNodes = {};
+ 
+   this.setupMessageManager();
+ }
+ 
+@@ -2957,17 +2877,19 @@ HeadsUpDisplay.prototype = {
    /**
     * Message names that the HUD listens for. These messages come from the remote
     * Web Console content script.
@@ -768,7 +883,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    groupDepth: 0,
  
-@@ -3284,17 +3211,17 @@ HeadsUpDisplay.prototype = {
+@@ -3284,17 +3206,17 @@ HeadsUpDisplay.prototype = {
      }
      catch (ex) {}
  
@@ -787,7 +902,27 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        }
      }
      else {
-@@ -3968,17 +3895,17 @@ HeadsUpDisplay.prototype = {
+@@ -3357,19 +3279,17 @@ HeadsUpDisplay.prototype = {
+     this.contentDocument = this.contentWindow.document;
+     this.uriSpec = this.contentWindow.location.href;
+ 
+     if (this.consolePanel) {
+       this.consolePanel.label = this.getPanelTitle();
+     }
+ 
+     if (this.jsterm) {
+-      this.jsterm.context = Cu.getWeakReference(this.contentWindow);
+       this.jsterm.console = this.console;
+-      this.jsterm.createSandbox();
+     }
+     else if (this.gcliterm) {
+       this.gcliterm.reattachConsole(this.contentWindow, this.console);
+     }
+     else {
+       this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
+     }
+   },
+@@ -3968,17 +3888,17 @@ HeadsUpDisplay.prototype = {
            return;
          }
  
@@ -806,7 +941,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      if (level == "dir") {
        // Initialize the inspector message node, by setting the PropertyTreeView
-@@ -4091,19 +4018,27 @@ HeadsUpDisplay.prototype = {
+@@ -4091,19 +4011,27 @@ HeadsUpDisplay.prototype = {
    {
      if (!aMessage.json || aMessage.json.hudId != this.hudId) {
        Cu.reportError("JSTerm: received message " + aMessage.name +
@@ -821,7 +956,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          this._receiveMessageWithCallback(aMessage.json);
          break;
 +      case "JSTerm:ClearOutput":
-+        this.clearOutput();
++        this.jsterm.clearOutput();
 +        break;
 +      case "JSTerm:InspectObject":
 +        this.handleInspectObject(aMessage.json);
@@ -834,7 +969,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          break;
        case "WebConsole:CachedMessages":
          this._displayCachedConsoleMessages(aMessage.json.messages);
-@@ -4224,17 +4159,17 @@ HeadsUpDisplay.prototype = {
+@@ -4224,17 +4152,17 @@ HeadsUpDisplay.prototype = {
    },
  
    /**
@@ -853,7 +988,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      if (this.jsterm) {
        this.jsterm.destroy();
      }
-@@ -4281,559 +4216,66 @@ function NodeFactory(aFactoryType, ignor
+@@ -4281,559 +4209,64 @@ function NodeFactory(aFactoryType, ignor
        return aDocument.createElement(aTag);
      }
    }
@@ -1367,6 +1502,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 + *        The HeadsUpDisplay object that owns this JSTerm instance.
   */
 -function JSTerm(aContext, aParentNode, aMixin, aConsole)
++// TODO: recheck comment.
 +function JSTerm(aHud, aMixin)
  {
    // set the context, attach the UI by appending to aParentNode
@@ -1392,15 +1528,13 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +  this.console = this.hud.console;
 +  this.document = this.parentNode.ownerDocument;
 +
-+  this.setTimeout = this.document.defaultView.setTimeout;
-+
 +  this.hudId = this.hud.hudId;
 +
 +  this.lastCompletion = {};
    this.history = [];
    this.historyIndex = 0;
    this.historyPlaceHolder = 0;  // this.history.length;
-   this.log = LogFactory("*** JSTerm:");
+-  this.log = LogFactory("*** JSTerm:");
 -  this.autocompletePopup = new AutocompletePopup(aParentNode.ownerDocument);
 +  this.autocompletePopup = new AutocompletePopup(this.document);
    this.autocompletePopup.onSelect = this.onAutocompleteSelect.bind(this);
@@ -1428,7 +1562,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this._inputEventHandler = this.inputEventHandler.bind(this);
  
      this.inputNode.addEventListener("keypress",
-@@ -4854,203 +4296,102 @@ JSTerm.prototype = {
+@@ -4854,203 +4287,113 @@ JSTerm.prototype = {
      this.mixins.generateUI();
    },
  
@@ -1504,29 +1638,38 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    };
 +
 +    this.hud.sendMessageToContent("JSTerm:EvalRequest", message, aCallback);
++
++    return message;
 +  },
 +
-+  _executeResultCallback: function JST__executeResultCallback(aResponse)
++  _executeResultCallback:
++  function JST__executeResultCallback(aResponse, aRequest)
 +  {
 +    let errorMessage = aResponse.errorMessage;
 +    let resultString = aResponse.resultString;
 +
 +    // Hide undefined results coming from JSTerm helper functions.
 +    if (!errorMessage && resultString == "undefined" &&
-+        aResponse.helperResult && !aResponse.inspectable) {
++        aResponse.helperResult && !aResponse.inspectable &&
++        !aResponse.helperRawOutput) {
 +      return;
 +    }
 +
++    let afterNode = aRequest.outputNode;
++
 +    if (aResponse.errorMessage) {
-+      this.writeOutput(aResponse.errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR);
++      this.writeOutput(aResponse.errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR,
++                       afterNode);
 +    }
 +    else if (aResponse.inspectable) {
 +      let node = this.writeOutputJS(aResponse.resultString,
-+                                    this._evalOutputClick.bind(this, aResponse));
++                                    this._evalOutputClick.bind(this, aResponse),
++                                    afterNode);
 +      node._evalCacheId = aResponse.childrenCacheId;
 +    }
 +    else {
-+      this.writeOutput(aResponse.resultString, CATEGORY_OUTPUT, SEVERITY_LOG);
++      this.writeOutput(aResponse.resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
++                       afterNode);
 +    }
 +  },
  
@@ -1539,8 +1682,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        return;
      }
  
-     this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
- 
+-    this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
+-
 -    try {
 -      this.helperEvaluated = false;
 -      let result = this.evalInSandbox(aExecuteString);
@@ -1562,8 +1705,12 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    catch (ex) {
 -      this.writeOutput("" + ex, CATEGORY_OUTPUT, SEVERITY_ERROR);
 -    }
-+    this.evalInContentSandbox(aExecuteString,
-+                              this._executeResultCallback.bind(this));
++    let node = this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
++
++    let messageToContent =
++      this.evalInContentSandbox(aExecuteString,
++                                this._executeResultCallback.bind(this));
++    messageToContent.outputNode = node;
  
      this.history.push(aExecuteString);
      this.historyIndex++;
@@ -1676,7 +1823,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      if (aOptions.updateButtonCallback) {
        buttons.push({
-@@ -5060,17 +4401,17 @@ JSTerm.prototype = {
+@@ -5060,17 +4403,17 @@ JSTerm.prototype = {
        });
      }
  
@@ -1695,7 +1842,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        propPanel.panel.addEventListener("popuphiding", function onPopupHide() {
          propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
          aOptions.anchor._panelOpen = false;
-@@ -5081,79 +4422,50 @@ JSTerm.prototype = {
+@@ -5081,79 +4424,53 @@ JSTerm.prototype = {
      return propPanel;
    },
  
@@ -1716,7 +1863,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +   *        The evaluation result object, coming from the content process.
 +   */
 +  // TODO: update comment.
-+  writeOutputJS: function JST_writeOutputJS(aOutputMessage, aCallback)
++  writeOutputJS:
++  function JST_writeOutputJS(aOutputMessage, aCallback, aNodeAfter)
    {
 -    let node = ConsoleUtils.createMessageNode(this.document,
 -                                              CATEGORY_OUTPUT,
@@ -1751,7 +1899,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    }, false);
 -
 -    ConsoleUtils.outputMessageNode(node, this.hudId);
-+    let node = this.writeOutput(aOutputMessage, CATEGORY_OUTPUT, SEVERITY_LOG);
++    let node = this.writeOutput(aOutputMessage, CATEGORY_OUTPUT, SEVERITY_LOG,
++                                aNodeAfter);
 +    if (aCallback) {
 +      this.hud.makeOutputMessageLink(node, aCallback);
 +    }
@@ -1770,17 +1919,21 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        The severity of message: one of the SEVERITY_ constants.
     * @returns void
     */
+-  writeOutput: function JST_writeOutput(aOutputMessage, aCategory, aSeverity)
 +  // TODO: update comment.
-   writeOutput: function JST_writeOutput(aOutputMessage, aCategory, aSeverity)
++  writeOutput:
++  function JST_writeOutput(aOutputMessage, aCategory, aSeverity, aNodeAfter)
    {
 -    let node = ConsoleUtils.createMessageNode(this.document,
 -                                              aCategory, aSeverity,
 -                                              aOutputMessage, this.hudId);
+-
+-    ConsoleUtils.outputMessageNode(node, this.hudId);
 +    let node = ConsoleUtils.createMessageNode(this.document, aCategory,
 +                                              aSeverity, aOutputMessage,
 +                                              this.hudId);
- 
-     ConsoleUtils.outputMessageNode(node, this.hudId);
++
++    ConsoleUtils.outputMessageNode(node, this.hudId, aNodeAfter);
 +    return node;
    },
  
@@ -1790,7 +1943,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @param boolean aClearStorage
     *        True if you want to clear the console messages storage associated to
     *        this Web Console.
-@@ -5434,17 +4746,17 @@ JSTerm.prototype = {
+@@ -5434,17 +4751,17 @@ JSTerm.prototype = {
    // Stores the data for the last completion.
    lastCompletion: null,
  
@@ -1809,17 +1962,24 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *          cursor position to the end of the completed text.
     *          If there is only one possible completion, then this completion
     *          value is used and the cursor is put at the end of the completion.
-@@ -5456,99 +4768,144 @@ JSTerm.prototype = {
+@@ -5453,102 +4770,158 @@ JSTerm.prototype = {
+    *          then the previous completion of all possible completions is used.
+    *    - this.COMPLETE_HINT_ONLY: If there is more than one possible
+    *          completion and the input value stayed the same compared to the
     *          last time this function was called, then the same completion is
     *          used again. If there is only one possible completion, then
     *          the inputNode.value is set to this value and the selection is set
     *          from the current cursor position to the end of the completed text.
     *
++   * @param function aCallback
++   *        Optional function invoked when the autocomplete properties are
++   *        updated.
++   *
     * @returns boolean true if there existed a completion for the current input,
     *          or false otherwise.
     */
 -  complete: function JSTF_complete(type)
-+  complete: function JSTF_complete(aType)
++  complete: function JSTF_complete(aType, aCallback)
    {
      let inputNode = this.inputNode;
      let inputValue = inputNode.value;
@@ -1838,7 +1998,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
 +    // Update the completion results.
 +    if (this.lastCompletion.value != inputValue) {
-+      this.updateCompletionResult(aType);
++      this.updateCompletionResult(aType, aCallback);
 +      return false;
 +    }
 +
@@ -1883,17 +2043,20 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    }
 -    else if (type == this.COMPLETE_FORWARD) {
 -      this.autocompletePopup.selectNextItem();
+-    }
+-
 +    else if (aType == this.COMPLETE_BACKWARD) {
 +      popup.selectPreviousItem();
 +    }
 +    else if (aType == this.COMPLETE_FORWARD) {
 +      popup.selectNextItem();
-     }
- 
++    }
++
++    aCallback && aCallback(this);
      return accepted || popup.itemCount > 0;
    },
  
-+  updateCompletionResult: function JST_updateCompletionResult(aType)
++  updateCompletionResult: function JST_updateCompletionResult(aType, aCallback)
 +  {
 +    if (this.lastCompletion.value == this.inputNode.value) {
 +      return;
@@ -1905,13 +2068,13 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    };
 +
 +    this.lastCompletion = {requestId: message.id, completionType: aType};
-+    this.hud.sendMessageToContent("JSTerm:Autocomplete", message,
-+                                  this.receiveAutocompleteProperties.bind(this));
++    let callback = this.receiveAutocompleteProperties.bind(this, aCallback);
++    this.hud.sendMessageToContent("JSTerm:Autocomplete", message, callback);
 +  },
 +
 +
 +  receiveAutocompleteProperties:
-+  function JST_receiveAutocompleteProperties(aMessage)
++  function JST_receiveAutocompleteProperties(aCallback, aMessage)
 +  {
 +    let inputNode = this.inputNode;
 +    let inputValue = inputNode.value;
@@ -1947,17 +2110,23 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      popup.hidePopup();
 +    }
 +
-+    if (items.length > 0) {
++    if (items.length == 1) {
 +      popup.selectedIndex = 0;
-+      if (items.length == 1) {
-+        // onSelect is not fired when the popup is not open.
-+        this.onAutocompleteSelect();
-+      }
 +    }
++
++    this.onAutocompleteSelect();
 +
 +    if (completionType != this.COMPLETE_HINT_ONLY && popup.itemCount == 1) {
 +      this.acceptProposedCompletion();
 +    }
++    else if (completionType == this.COMPLETE_BACKWARD) {
++      popup.selectPreviousItem();
++    }
++    else if (completionType == this.COMPLETE_FORWARD) {
++      popup.selectNextItem();
++    }
++
++    aCallback && aCallback(this);
 +  },
 +
    onAutocompleteSelect: function JSTF_onAutocompleteSelect()
@@ -1991,7 +2160,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Accept the proposed input completion.
-@@ -5557,17 +4914,17 @@ JSTerm.prototype = {
+@@ -5557,17 +4930,17 @@ JSTerm.prototype = {
     *         True if there was a selected completion item and the input value
     *         was updated, false otherwise.
     */
@@ -2010,7 +2179,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      this.clearCompletion();
  
-@@ -5591,18 +4948,17 @@ JSTerm.prototype = {
+@@ -5591,18 +4964,17 @@ JSTerm.prototype = {
     * Clear the object cache from the Web Console content instance.
     *
     * @param string aCacheId
@@ -2030,7 +2199,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * received from the Web Console content instance.
     *
     * @param string aCacheId
-@@ -5619,28 +4975,139 @@ JSTerm.prototype = {
+@@ -5619,28 +4991,139 @@ JSTerm.prototype = {
    function JST_remoteObjectProvider(aCacheId, aObjectId, aResultCacheId,
                                      aCallback) {
      let message = {
@@ -2172,7 +2341,25 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * essentially consists of the interactive JavaScript input facility.
   *
   * @param nsWeakPtr<nsIDOMWindow> aContext
-@@ -5930,17 +5397,17 @@ ConsoleUtils = {
+@@ -5657,17 +5140,16 @@ JSTermFirefoxMixin(aContext,
+                    aExistingConsole)
+ {
+   // aExisting Console is the existing outputNode to use in favor of
+   // creating a new outputNode - this is so we can just attach the inputNode to
+   // a normal HeadsUpDisplay console output, and re-use code.
+   this.context = aContext;
+   this.parentNode = aParentNode;
+   this.existingConsoleNode = aExistingConsole;
+-  this.setTimeout = aParentNode.ownerDocument.defaultView.setTimeout;
+ 
+   if (aParentNode.ownerDocument) {
+     this.xulElementFactory =
+       NodeFactory("xul", "xul", aParentNode.ownerDocument);
+ 
+     this.textFactory = NodeFactory("text", "xul", aParentNode.ownerDocument);
+     this.generateUI();
+     this.attachUI();
+@@ -5930,17 +5412,17 @@ ConsoleUtils = {
        tree.appendChild(treecols);
  
        tree.appendChild(aDocument.createElement("treechildren"));
@@ -2191,7 +2378,50 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          remoteObjectProvider: body.remoteObjectProvider,
        };
  
-@@ -6389,86 +5856,46 @@ HeadsUpDisplayUICommands = {
+@@ -6167,18 +5649,21 @@ ConsoleUtils = {
+   /**
+    * Filters a node appropriately, then sends it to the output, regrouping and
+    * pruning output as necessary.
+    *
+    * @param nsIDOMNode aNode
+    *        The message node to send to the output.
+    * @param string aHUDId
+    *        The ID of the HUD in which to insert this node.
+-   */
+-  outputMessageNode: function ConsoleUtils_outputMessageNode(aNode, aHUDId) {
++   * @param nsIDOMNode [aNodeAfter]
++   *        Insert the node after the given aNodeAfter (optional).
++   */
++  outputMessageNode:
++  function ConsoleUtils_outputMessageNode(aNode, aHUDId, aNodeAfter) {
+     ConsoleUtils.filterMessageNode(aNode, aHUDId);
+     let outputNode = HUDService.hudReferences[aHUDId].outputNode;
+ 
+     let scrolledToBottom = ConsoleUtils.isOutputScrolledToBottom(outputNode);
+ 
+     let isRepeated = false;
+     if (aNode.classList.contains("webconsole-msg-cssparser")) {
+       isRepeated = this.filterRepeatedCSS(aNode, outputNode, aHUDId);
+@@ -6187,17 +5672,17 @@ ConsoleUtils = {
+     if (!isRepeated &&
+         (aNode.classList.contains("webconsole-msg-console") ||
+          aNode.classList.contains("webconsole-msg-exception") ||
+          aNode.classList.contains("webconsole-msg-error"))) {
+       isRepeated = this.filterRepeatedConsole(aNode, outputNode);
+     }
+ 
+     if (!isRepeated) {
+-      outputNode.appendChild(aNode);
++      outputNode.insertBefore(aNode, aNodeAfter ? aNodeAfter.nextSibling : null);
+     }
+ 
+     HUDService.regroupOutput(outputNode);
+ 
+     if (pruneConsoleOutputIfNecessary(aHUDId, aNode.category) == 0) {
+       // We can't very well scroll to make the message node visible if the log
+       // limit is zero and the node was destroyed in the first place.
+       return;
+@@ -6389,86 +5874,46 @@ HeadsUpDisplayUICommands = {
        }
        case "saveBodies": {
          let checked = aButton.getAttribute("checked") === "true";
@@ -2283,7 +2513,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  /**
   * A controller (an instance of nsIController) that makes editing actions
-@@ -6893,16 +6320,17 @@ GcliTerm.prototype = {
+@@ -6893,16 +6338,17 @@ GcliTerm.prototype = {
  
          linkNode.addEventListener("click", function(aEv) {
            if (aEv.detail != 1 || aEv.button != 0 ||
@@ -3602,11 +3832,21 @@ deleted file mode 100644
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
 --- a/browser/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -46,17 +46,17 @@
+@@ -39,24 +39,24 @@
+  * and other provisions required by the GPL or the LGPL. If you do not delete
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
  
- let Cc = Components.classes;
- let Ci = Components.interfaces;
- let Cu = Components.utils;
+ "use strict";
+ 
+-let Cc = Components.classes;
+-let Ci = Components.interfaces;
+-let Cu = Components.utils;
++const Cc = Components.classes;
++const Ci = Components.interfaces;
++const Cu = Components.utils;
  
  Cu.import("resource://gre/modules/XPCOMUtils.jsm");
  Cu.import("resource://gre/modules/Services.jsm");
@@ -3621,7 +3861,44 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
                  ARRAY: 2,
                  OTHER: 3,
                  ITERATOR: 4,
-@@ -737,8 +737,234 @@ WebConsoleUtils.l10n = {
+@@ -436,33 +436,34 @@ var WebConsoleUtils = {
+           display: presentable.substring(0, presentable.indexOf(')') + 1)
+         };
+ 
+       default:
+         presentable = String(aObject);
+         let m = /^\[object (\S+)\]/.exec(presentable);
+ 
+         try {
+-          if (type == "object" && typeof aObject.next == "function" &&
++          if (typeof aObject == "object" && typeof aObject.next == "function" &&
+               m && m[1] == "Generator") {
+             return {
+               type: TYPES.GENERATOR,
+               display: m[1]
+             };
+           }
+         }
+         catch (ex) {
+           // window.history.next throws in the typeof check above.
+           return {
+             type: TYPES.OBJECT,
+             display: m ? m[1] : "Object"
+           };
+         }
+ 
+-        if (type == "object" && typeof aObject.__iterator__ == "function") {
++        if (typeof aObject == "object" &&
++            typeof aObject.__iterator__ == "function") {
+           return {
+             type: TYPES.ITERATOR,
+             display: "Iterator"
+           };
+         }
+ 
+         return {
+           type: TYPES.OBJECT,
+@@ -737,8 +738,234 @@ WebConsoleUtils.l10n = {
      }
      return result;
    },
@@ -3636,7 +3913,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 +// JS Completer
 +//////////////////////////////////////////////////////////////////////////
 +
-+var JSPropertyProvider = (function(WCU) {
++var JSPropertyProvider = (function _JSPP(WCU) {
 +const STATE_NORMAL = 0;
 +const STATE_QUOTE = 2;
 +const STATE_DQUOTE = 3;
@@ -3856,3 +4133,2145 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 +
 +return JSPropertyProvider;
 +})(WebConsoleUtils);
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
+@@ -36,40 +36,40 @@
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "data:text/html;charset=utf-8,<p>bug 585991 - autocomplete popup keyboard usage test";
+ let HUD;
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("load", tabLoaded, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
+ }
+ 
+-function tabLoaded() {
+-  browser.removeEventListener("load", tabLoaded, true);
+-  openConsole();
++function consoleOpened(aHud) {
++  HUD = aHud;
+ 
+   content.wrappedJSObject.foobarBug585991 = {
+     "item0": "value0",
+     "item1": "value1",
+     "item2": "value2",
+     "item3": "value3",
+   };
+ 
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  HUD = HUDService.hudReferences[hudId];
+   let jsterm = HUD.jsterm;
+   let popup = jsterm.autocompletePopup;
+   let completeNode = jsterm.completeNode;
+ 
+   ok(!popup.isOpen, "popup is not open");
+ 
+-  popup._panel.addEventListener("popupshown", function() {
+-    popup._panel.removeEventListener("popupshown", arguments.callee, false);
++  popup._panel.addEventListener("popupshown", function onShown() {
++    popup._panel.removeEventListener("popupshown", onShown, false);
+ 
+     ok(popup.isOpen, "popup is open");
+ 
+     is(popup.itemCount, 4, "popup.itemCount is correct");
+ 
+     let sameItems = popup.getItems();
+     is(sameItems.every(function(aItem, aIndex) {
+       return aItem.label == "item" + aIndex;
+@@ -107,43 +107,43 @@ function tabLoaded() {
+ 
+ function autocompletePopupHidden()
+ {
+   let jsterm = HUD.jsterm;
+   let popup = jsterm.autocompletePopup;
+   let completeNode = jsterm.completeNode;
+   let inputNode = jsterm.inputNode;
+ 
+-  popup._panel.removeEventListener("popuphidden", arguments.callee, false);
++  popup._panel.removeEventListener("popuphidden", autocompletePopupHidden, false);
+ 
+   ok(!popup.isOpen, "popup is not open");
+ 
+   is(inputNode.value, "window.foobarBug585991.item0",
+      "completion was successful after VK_TAB");
+ 
+   ok(!completeNode.value, "completeNode is empty");
+ 
+-  popup._panel.addEventListener("popupshown", function() {
+-    popup._panel.removeEventListener("popupshown", arguments.callee, false);
++  popup._panel.addEventListener("popupshown", function onShown() {
++    popup._panel.removeEventListener("popupshown", onShown, false);
+ 
+     ok(popup.isOpen, "popup is open");
+ 
+     is(popup.itemCount, 4, "popup.itemCount is correct");
+ 
+     is(popup.selectedIndex, -1, "no index is selected");
+     EventUtils.synthesizeKey("VK_DOWN", {});
+     
+     let prefix = jsterm.inputNode.value.replace(/[\S]/g, " ");
+ 
+     is(popup.selectedIndex, 0, "index 0 is selected");
+     is(popup.selectedItem.label, "item0", "item0 is selected");
+     is(completeNode.value, prefix + "item0", "completeNode.value holds item0");
+ 
+-    popup._panel.addEventListener("popuphidden", function() {
+-      popup._panel.removeEventListener("popuphidden", arguments.callee, false);
++    popup._panel.addEventListener("popuphidden", function onHidden() {
++      popup._panel.removeEventListener("popuphidden", onHidden, false);
+ 
+       ok(!popup.isOpen, "popup is not open after VK_ESCAPE");
+ 
+       is(inputNode.value, "window.foobarBug585991.",
+          "completion was cancelled");
+ 
+       ok(!completeNode.value, "completeNode is empty");
+ 
+@@ -163,18 +163,18 @@ function autocompletePopupHidden()
+ 
+ function testReturnKey()
+ {
+   let jsterm = HUD.jsterm;
+   let popup = jsterm.autocompletePopup;
+   let completeNode = jsterm.completeNode;
+   let inputNode = jsterm.inputNode;
+ 
+-  popup._panel.addEventListener("popupshown", function() {
+-    popup._panel.removeEventListener("popupshown", arguments.callee, false);
++  popup._panel.addEventListener("popupshown", function onShown() {
++    popup._panel.removeEventListener("popupshown", onShown, false);
+ 
+     ok(popup.isOpen, "popup is open");
+ 
+     is(popup.itemCount, 4, "popup.itemCount is correct");
+     
+     is(popup.selectedIndex, -1, "no index is selected");
+     EventUtils.synthesizeKey("VK_DOWN", {});
+ 
+@@ -185,18 +185,18 @@ function testReturnKey()
+     is(completeNode.value, prefix + "item0", "completeNode.value holds item0");
+ 
+     EventUtils.synthesizeKey("VK_DOWN", {});
+ 
+     is(popup.selectedIndex, 1, "index 1 is selected");
+     is(popup.selectedItem.label, "item1", "item1 is selected");
+     is(completeNode.value, prefix + "item1", "completeNode.value holds item1");
+ 
+-    popup._panel.addEventListener("popuphidden", function() {
+-      popup._panel.removeEventListener("popuphidden", arguments.callee, false);
++    popup._panel.addEventListener("popuphidden", function onHidden() {
++      popup._panel.removeEventListener("popuphidden", onHidden, false);
+ 
+       ok(!popup.isOpen, "popup is not open after VK_RETURN");
+ 
+       is(inputNode.value, "window.foobarBug585991.item1",
+          "completion was successful after VK_RETURN");
+ 
+       ok(!completeNode.value, "completeNode is empty");
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
+@@ -8,67 +8,62 @@
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ let HUD;
+ 
+ let outputItem;
+ 
+-function tabLoad1(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
+-
+-  openConsole();
+-
+-  HUD = HUDService.getHudByWindow(content);
++function consoleOpened(aHud) {
++  HUD = aHud;
+ 
+   outputNode = HUD.outputNode;
+ 
+   browser.addEventListener("load", tabLoad2, true);
+ 
+   // Reload so we get some output in the console.
+   browser.contentWindow.location.reload();
+-  log(document);
+ }
+ 
+ function tabLoad2(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++  browser.removeEventListener(aEvent.type, tabLoad2, true);
+ 
+   outputItem = outputNode.querySelector(".hud-networkinfo .hud-clickable");
+   ok(outputItem, "found a network message");
+   document.addEventListener("popupshown", networkPanelShown, false);
+ 
+   // Send the mousedown and click events such that the network panel opens.
+   EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
+   EventUtils.sendMouseEvent({type: "click"}, outputItem);
+ }
+ 
+ function networkPanelShown(aEvent) {
+-  document.removeEventListener(aEvent.type, arguments.callee, false);
++  document.removeEventListener(aEvent.type, networkPanelShown, false);
+ 
+   document.addEventListener("popupshown", networkPanelShowFailure, false);
+ 
+   // The network panel should not open for the second time.
+   EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
+   EventUtils.sendMouseEvent({type: "click"}, outputItem);
+ 
+   executeSoon(function() {
+     aEvent.target.addEventListener("popuphidden", networkPanelHidden, false);
+     aEvent.target.hidePopup();
+   });
+ }
+ 
+ function networkPanelShowFailure(aEvent) {
+-  document.removeEventListener(aEvent.type, arguments.callee, false);
++  document.removeEventListener(aEvent.type, networkPanelShowFailure, false);
+ 
+   ok(false, "the network panel should not show");
+ }
+ 
+ function networkPanelHidden(aEvent) {
+-  this.removeEventListener(aEvent.type, arguments.callee, false);
++  this.removeEventListener(aEvent.type, networkPanelHidden, false);
+ 
+   // The network panel should not show because this is a mouse event that starts
+   // in a position and ends in another.
+   EventUtils.sendMouseEvent({type: "mousedown", clientX: 3, clientY: 4},
+     outputItem);
+   EventUtils.sendMouseEvent({type: "click", clientX: 5, clientY: 6},
+     outputItem);
+ 
+@@ -87,51 +82,58 @@ function networkPanelHidden(aEvent) {
+   executeSoon(function() {
+     document.removeEventListener("popupshown", networkPanelShowFailure, false);
+ 
+     // Done with the network output. Now test the jsterm output and the property
+     // panel.
+     HUD.jsterm.setInputValue("document");
+     HUD.jsterm.execute();
+ 
+-    outputItem = outputNode.querySelector(".webconsole-msg-output " +
+-                                          ".hud-clickable");
+-    ok(outputItem, "found a jsterm output message");
++    waitForSuccess({
++      name: "jsterm output message",
++      validatorFn: function()
++      {
++        return outputNode.querySelector(".webconsole-msg-output .hud-clickable");
++      },
++      successFn: function()
++      {
++        document.addEventListener("popupshown", propertyPanelShown, false);
+ 
+-    document.addEventListener("popupshown", properyPanelShown, false);
+-
+-    // Send the mousedown and click events such that the property panel opens.
+-    EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
+-    EventUtils.sendMouseEvent({type: "click"}, outputItem);
++        // Send the mousedown and click events such that the property panel opens.
++        EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
++        EventUtils.sendMouseEvent({type: "click"}, outputItem);
++      },
++      failureFn: finishTest,
++    });
+   });
+ }
+ 
+-function properyPanelShown(aEvent) {
+-  document.removeEventListener(aEvent.type, arguments.callee, false);
++function propertyPanelShown(aEvent) {
++  document.removeEventListener(aEvent.type, propertyPanelShown, false);
+ 
+   document.addEventListener("popupshown", propertyPanelShowFailure, false);
+ 
+   // The property panel should not open for the second time.
+   EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
+   EventUtils.sendMouseEvent({type: "click"}, outputItem);
+ 
+   executeSoon(function() {
+     aEvent.target.addEventListener("popuphidden", propertyPanelHidden, false);
+     aEvent.target.hidePopup();
+   });
+ }
+ 
+ function propertyPanelShowFailure(aEvent) {
+-  document.removeEventListener(aEvent.type, arguments.callee, false);
++  document.removeEventListener(aEvent.type, propertyPanelShowFailure, false);
+ 
+   ok(false, "the property panel should not show");
+ }
+ 
+ function propertyPanelHidden(aEvent) {
+-  this.removeEventListener(aEvent.type, arguments.callee, false);
++  this.removeEventListener(aEvent.type, propertyPanelHidden, false);
+ 
+   // The property panel should not show because this is a mouse event that
+   // starts in a position and ends in another.
+   EventUtils.sendMouseEvent({type: "mousedown", clientX: 3, clientY: 4},
+     outputItem);
+   EventUtils.sendMouseEvent({type: "click", clientX: 5, clientY: 6},
+     outputItem);
+ 
+@@ -144,18 +146,21 @@ function propertyPanelHidden(aEvent) {
+   // The property panel should not show because this is a right-click.
+   EventUtils.sendMouseEvent({type: "mousedown", button: 2},
+     outputItem);
+   EventUtils.sendMouseEvent({type: "click", button: 2},
+     outputItem);
+ 
+   executeSoon(function() {
+     document.removeEventListener("popupshown", propertyPanelShowFailure, false);
+-    outputItem = null;
+-    finishTest();
++    HUD = outputItem = null;
++    executeSoon(finishTest);
+   });
+ }
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("load", tabLoad1, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+@@ -164,25 +164,63 @@ function testGen() {
+ 
+   HUD.jsterm.clearOutput();
+ 
+   // Test jsterm print() output.
+ 
+   HUD.jsterm.setInputValue("print(" + inputValue + ")");
+   HUD.jsterm.execute();
+ 
++  waitForSuccess({
++    name: "jsterm print() output for test #" + cpos,
++    validatorFn: function()
++    {
++      return HUD.outputNode.querySelector(".webconsole-msg-output:last-child");
++    },
++    successFn: subtestNext,
++    failureFn: testNext,
++  });
++
++  yield;
++
+   outputItem = HUD.outputNode.querySelector(".webconsole-msg-output:" +
+                                             "last-child");
+   ok(outputItem,
+     "found the jsterm print() output line for inputValues[" + cpos + "]");
+   ok(outputItem.textContent.indexOf(printOutput) > -1,
+     "jsterm print() output is correct for inputValues[" + cpos + "]");
+ 
+   // Test jsterm execution output.
+ 
++  HUD.jsterm.clearOutput();
++  HUD.jsterm.setInputValue(inputValue);
++  HUD.jsterm.execute();
++
++  waitForSuccess({
++    name: "jsterm output for test #" + cpos,
++    validatorFn: function()
++    {
++      return HUD.outputNode.querySelector(".webconsole-msg-output:last-child");
++    },
++    successFn: subtestNext,
++    failureFn: testNext,
++  });
++
++  yield;
++
++  outputItem = HUD.outputNode.querySelector(".webconsole-msg-output:" +
++                                            "last-child");
++  ok(outputItem, "found the jsterm output line for inputValues[" + cpos + "]");
++  ok(outputItem.textContent.indexOf(expectedOutput) > -1,
++    "jsterm output is correct for inputValues[" + cpos + "]");
++
++  let messageBody = outputItem.querySelector(".webconsole-msg-body");
++  ok(messageBody, "we have the message body for inputValues[" + cpos + "]");
++
++  // Test click on output.
+   let eventHandlerID = eventHandlers.length + 1;
+ 
+   let propertyPanelShown = function(aEvent) {
+     let label = aEvent.target.getAttribute("label");
+     if (!label || label.indexOf(inputValue) == -1) {
+       return;
+     }
+ 
+@@ -200,29 +238,16 @@ function testGen() {
+       subtestNext();
+     }
+   };
+ 
+   document.addEventListener("popupshown", propertyPanelShown, false);
+ 
+   eventHandlers.push(propertyPanelShown);
+ 
+-  HUD.jsterm.clearOutput();
+-  HUD.jsterm.setInputValue(inputValue);
+-  HUD.jsterm.execute();
+-
+-  outputItem = HUD.outputNode.querySelector(".webconsole-msg-output:" +
+-                                            "last-child");
+-  ok(outputItem, "found the jsterm output line for inputValues[" + cpos + "]");
+-  ok(outputItem.textContent.indexOf(expectedOutput) > -1,
+-    "jsterm output is correct for inputValues[" + cpos + "]");
+-
+-  let messageBody = outputItem.querySelector(".webconsole-msg-body");
+-  ok(messageBody, "we have the message body for inputValues[" + cpos + "]");
+-
+   // Send the mousedown, mouseup and click events to check if the property
+   // panel opens.
+   EventUtils.sendMouseEvent({ type: "mousedown" }, messageBody, window);
+   EventUtils.sendMouseEvent({ type: "click" }, messageBody, window);
+ 
+   if (showsPropertyPanel) {
+     yield; // wait for the panel to open if we need to.
+   }
+@@ -246,17 +271,17 @@ function testEnd() {
+   }
+ 
+   for (let i = 0; i < inputValues.length; i++) {
+     if (inputValues[i][0] && !popupShown[i]) {
+       ok(false, "the property panel failed to show for inputValues[" + i + "]");
+     }
+   }
+ 
+-  testDriver = null;
++  HUD = inputValues = testDriver = null;
+   executeSoon(finishTest);
+ }
+ 
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", tabLoad, true);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
+@@ -35,22 +35,23 @@
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("load", function() {
+-    browser.removeEventListener("load", arguments.callee, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
+ 
+-    openConsole();
+-    content.location.reload();
+-    browser.addEventListener("load", tabLoaded, true);
++    openConsole(null, function() {
++      content.location.reload();
++      browser.addEventListener("load", tabLoaded, true);
++    });
+   }, true);
+ }
+ 
+ function tabLoaded() {
+   browser.removeEventListener("load", tabLoaded, true);
+ 
+   let hudId = HUDService.getHudIdByWindow(content);
+   let HUD = HUDService.hudReferences[hudId];
+@@ -58,19 +59,16 @@ function tabLoaded() {
+   HUD.jsterm.execute("document");
+ 
+   let networkMessage = HUD.outputNode.querySelector(".webconsole-msg-network");
+   ok(networkMessage, "found network message");
+ 
+   let networkLink = networkMessage.querySelector(".webconsole-msg-link");
+   ok(networkLink, "found network message link");
+ 
+-  let jstermMessage = HUD.outputNode.querySelector(".webconsole-msg-output");
+-  ok(jstermMessage, "found output message");
+-
+   let popupset = document.getElementById("mainPopupSet");
+   ok(popupset, "found #mainPopupSet");
+ 
+   let popupsShown = 0;
+   let hiddenPopups = 0;
+ 
+   let onpopupshown = function() {
+     popupsShown++;
+@@ -113,11 +111,23 @@ function tabLoaded() {
+ 
+   registerCleanupFunction(function() {
+     is(popupsShown, 2, "correct number of popups shown");
+     if (popupsShown != 2) {
+       document.removeEventListener("popupshown", onpopupshown, false);
+     }
+   });
+ 
+-  EventUtils.synthesizeMouse(networkLink, 2, 2, {});
+-  EventUtils.synthesizeMouse(jstermMessage, 2, 2, {});
++  waitForSuccess({
++    name: "jsterm output message",
++    validatorFn: function()
++    {
++      return HUD.outputNode.querySelector(".webconsole-msg-output");
++    },
++    successFn: function()
++    {
++      let jstermMessage = HUD.outputNode.querySelector(".webconsole-msg-output");
++      EventUtils.synthesizeMouse(networkLink, 2, 2, {});
++      EventUtils.synthesizeMouse(jstermMessage, 2, 2, {});
++    },
++    failureFn: finishTest,
++  });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
+@@ -74,19 +74,16 @@ function tabLoaded() {
+   HUD.jsterm.execute("document");
+ 
+   let networkMessage = HUD.outputNode.querySelector(".webconsole-msg-network");
+   ok(networkMessage, "found network message");
+ 
+   let networkLink = networkMessage.querySelector(".webconsole-msg-link");
+   ok(networkLink, "found network message link");
+ 
+-  let jstermMessage = HUD.outputNode.querySelector(".webconsole-msg-output");
+-  ok(jstermMessage, "found output message");
+-
+   let popupset = document.getElementById("mainPopupSet");
+   ok(popupset, "found #mainPopupSet");
+ 
+   let popupsShown = 0;
+   let hiddenPopups = 0;
+ 
+   let onpopupshown = function() {
+     popupsShown++;
+@@ -140,18 +137,30 @@ function tabLoaded() {
+   registerCleanupFunction(function() {
+     is(popupsShown, 2, "correct number of popups shown");
+     if (popupsShown != 2) {
+       document.removeEventListener("popupshown", onpopupshown, false);
+     }
+   });
+ 
+   // Show the network and object inspector panels.
+-  EventUtils.synthesizeMouse(networkLink, 2, 2, {});
+-  EventUtils.synthesizeMouse(jstermMessage, 2, 2, {});
++  waitForSuccess({
++    name: "jsterm output message",
++    validatorFn: function()
++    {
++      return HUD.outputNode.querySelector(".webconsole-msg-output");
++    },
++    successFn: function()
++    {
++      let jstermMessage = HUD.outputNode.querySelector(".webconsole-msg-output");
++      EventUtils.synthesizeMouse(networkLink, 2, 2, {});
++      EventUtils.synthesizeMouse(jstermMessage, 2, 2, {});
++    },
++    failureFn: finishTest,
++  });
+ }
+ 
+ function togglePBAndThen(callback) {
+   function pbObserver(aSubject, aTopic, aData) {
+     if (aTopic != "private-browsing-transition-complete") {
+       return;
+     }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
+@@ -4,40 +4,65 @@
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  *
+  * Contributor(s):
+  *   Mihai Sucan <mihai.sucan@gmail.com>
+  */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-621644-jsterm-dollar.html";
+ 
+-function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, tabLoad, true);
++function test$(HUD) {
++  HUD.jsterm.clearOutput();
+ 
+-  openConsole(null, function(HUD) {
+-    HUD.jsterm.clearOutput();
++  HUD.jsterm.setInputValue("$(document.body)");
++  HUD.jsterm.execute();
+ 
+-    HUD.jsterm.setInputValue("$(document.body)");
+-    HUD.jsterm.execute();
++  waitForSuccess({
++    name: "jsterm output for $()",
++    validatorFn: function()
++    {
++      return HUD.outputNode.querySelector(".webconsole-msg-output:last-child");
++    },
++    successFn: function()
++    {
++      let outputItem = HUD.outputNode.
++                       querySelector(".webconsole-msg-output:last-child");
++      ok(outputItem.textContent.indexOf("<p>") > -1,
++         "jsterm output is correct for $()");
+ 
+-    let outputItem = HUD.outputNode.
+-                     querySelector(".webconsole-msg-output:last-child");
+-    ok(outputItem.textContent.indexOf("<p>") > -1,
+-       "jsterm output is correct for $()");
++      test$$(HUD);
++    },
++    failureFn: test$$.bind(null, HUD),
++  });
++}
+ 
+-    HUD.jsterm.clearOutput();
++function test$$(HUD) {
++  HUD.jsterm.clearOutput();
+ 
+-    HUD.jsterm.setInputValue("$$(document)");
+-    HUD.jsterm.execute();
++  HUD.jsterm.setInputValue("$$(document)");
++  HUD.jsterm.execute();
+ 
+-    outputItem = HUD.outputNode.
+-                     querySelector(".webconsole-msg-output:last-child");
+-    ok(outputItem.textContent.indexOf("621644") > -1,
+-       "jsterm output is correct for $$()");
++  waitForSuccess({
++    name: "jsterm output for $$()",
++    validatorFn: function()
++    {
++      return HUD.outputNode.querySelector(".webconsole-msg-output:last-child");
++    },
++    successFn: function()
++    {
++      let outputItem = HUD.outputNode.
++                       querySelector(".webconsole-msg-output:last-child");
++      ok(outputItem.textContent.indexOf("621644") > -1,
++         "jsterm output is correct for $$()");
+ 
+-    executeSoon(finishTest);
++      executeSoon(finishTest);
++    },
++    failureFn: finishTest,
+   });
+ }
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("load", tabLoad, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, test$);
++  }, true);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
+@@ -1,45 +1,46 @@
+ /* Any copyright is dedicated to the Public Domain.
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-632275-getters.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("load", tabLoaded, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
+ }
+ 
+-function tabLoaded() {
+-  browser.removeEventListener("load", tabLoaded, true);
+-  openConsole();
+-
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let HUD = HUDService.hudReferences[hudId];
++function consoleOpened(HUD) {
+   let jsterm = HUD.jsterm;
+ 
+   let doc = content.wrappedJSObject.document;
+ 
+-  let panel = jsterm.openPropertyPanel("Test1", doc);
++  let panel = jsterm.openPropertyPanel({ data: { object: doc }});
+ 
+-  let rows = panel.treeView._rows;
++  let view = panel.treeView;
+   let find = function(regex) {
+-    return rows.some(function(row) {
+-      return regex.test(row.display);
+-    });
++    for (let i = 0; i < view.rowCount; i++) {
++      if (regex.test(view.getCellText(i))) {
++        return true;
++      }
++    }
++    return false;
+   };
+ 
+   ok(!find(/^(width|height):/), "no document.width/height");
+ 
+   panel.destroy();
+ 
+   let getterValue = doc.foobar._val;
+ 
+-  panel = jsterm.openPropertyPanel("Test2", doc.foobar);
+-  rows = panel.treeView._rows;
++  panel = jsterm.openPropertyPanel({ data: { object: doc.foobar }});
++  view = panel.treeView;
+ 
+   is(getterValue, doc.foobar._val, "getter did not execute");
+   is(getterValue+1, doc.foobar.val, "getter executed");
+   is(getterValue+1, doc.foobar._val, "getter executed (recheck)");
+ 
+   ok(find(/^val: Getter$/),
+      "getter is properly displayed");
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+@@ -35,103 +35,123 @@
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-632347-iterators-generators.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("load", tabLoaded, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
+ }
+ 
+-function tabLoaded() {
+-  browser.removeEventListener("load", tabLoaded, true);
+-
++function consoleOpened(HUD) {
+   let tmp = {};
+   Cu.import("resource:///modules/WebConsoleUtils.jsm", tmp);
+   let WCU = tmp.WebConsoleUtils;
++  let JSPropertyProvider = tmp.JSPropertyProvider;
++  tmp = null;
+ 
+-  openConsole();
+-
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let HUD = HUDService.hudReferences[hudId];
+   let jsterm = HUD.jsterm;
+-
+   let win = content.wrappedJSObject;
+ 
+   // Make sure autocomplete does not walk through iterators and generators.
+   let result = win.gen1.next();
+-  let completion = jsterm.propertyProvider(win, "gen1.");
++  let completion = JSPropertyProvider(win, "gen1.");
+   is(completion, null, "no matchees for gen1");
+   ok(!WCU.isObjectInspectable(win.gen1),
+      "gen1 is not inspectable");
+ 
+   is(result+1, win.gen1.next(), "gen1.next() did not execute");
+ 
+   result = win.gen2.next();
+ 
+-  completion = jsterm.propertyProvider(win, "gen2.");
++  completion = JSPropertyProvider(win, "gen2.");
+   is(completion, null, "no matchees for gen2");
+   ok(!WCU.isObjectInspectable(win.gen2),
+      "gen2 is not inspectable");
+ 
+   is((result/2+1)*2, win.gen2.next(),
+      "gen2.next() did not execute");
+ 
+   result = win.iter1.next();
+   is(result[0], "foo", "iter1.next() [0] is correct");
+   is(result[1], "bar", "iter1.next() [1] is correct");
+ 
+-  completion = jsterm.propertyProvider(win, "iter1.");
++  completion = JSPropertyProvider(win, "iter1.");
+   is(completion, null, "no matchees for iter1");
+   ok(!WCU.isObjectInspectable(win.iter1),
+      "iter1 is not inspectable");
+ 
+   result = win.iter1.next();
+   is(result[0], "baz", "iter1.next() [0] is correct");
+   is(result[1], "baaz", "iter1.next() [1] is correct");
+ 
+-  completion = jsterm.propertyProvider(content, "iter2.");
++  completion = JSPropertyProvider(content, "iter2.");
+   is(completion, null, "no matchees for iter2");
+   ok(!WCU.isObjectInspectable(win.iter2),
+      "iter2 is not inspectable");
+ 
+-  completion = jsterm.propertyProvider(win, "window.");
++  completion = JSPropertyProvider(win, "window.");
+   ok(completion, "matches available for window");
+   ok(completion.matches.length, "matches available for window (length)");
+   ok(WCU.isObjectInspectable(win),
+      "window is inspectable");
+ 
+-  let panel = jsterm.openPropertyPanel("Test", win);
+-  ok(panel, "opened the Property Panel");
+-  let rows = panel.treeView._rows;
+-  ok(rows.length, "Property Panel rows are available");
++  jsterm.clearOutput();
++
++  jsterm.setInputValue("window");
++  jsterm.execute();
++
++  waitForSuccess({
++    name: "jsterm window object output",
++    validatorFn: function()
++    {
++      return HUD.outputNode.querySelector(".webconsole-msg-output");
++    },
++    successFn: function()
++    {
++      document.addEventListener("popupshown", function onShown(aEvent) {
++        document.removeEventListener("popupshown", onShown, false);
++        executeSoon(testPropertyPanel.bind(null, aEvent.target));
++      }, false);
++
++      let node = HUD.outputNode.querySelector(".webconsole-msg-output");
++      EventUtils.synthesizeMouse(node, 2, 2, {});
++    },
++    failureFn: finishTest,
++  });
++}
++
++function testPropertyPanel(aPanel) {
++  let tree = aPanel.querySelector("tree");
++  let view = tree.view;
++  let col = tree.columns[0];
++  ok(view.rowCount, "Property Panel rowCount");
+ 
+   let find = function(display, children) {
+-    return rows.some(function(row) {
+-      return row.display == display &&
+-             row.children == children;
+-    });
++    for (let i = 0; i < view.rowCount; i++) {
++      if (view.isContainer(i) == children &&
++          view.getCellText(i, col) == display) {
++        return true;
++      }
++    }
++
++    return false;
+   };
+ 
+   ok(find("gen1: Generator", false),
+      "gen1 is correctly displayed in the Property Panel");
+ 
+   ok(find("gen2: Generator", false),
+      "gen2 is correctly displayed in the Property Panel");
+ 
+   ok(find("iter1: Iterator", false),
+      "iter1 is correctly displayed in the Property Panel");
+ 
+   ok(find("iter2: Iterator", false),
+      "iter2 is correctly displayed in the Property Panel");
+ 
+-  /*
+-   * - disabled, see bug 632347, c#9
+-   * ok(find("parent: Window", true),
+-   *   "window.parent is correctly displayed in the Property Panel");
+-   */
+-
+-  panel.destroy();
+-
+-  finishTest();
++  executeSoon(finishTest);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js
+@@ -3,80 +3,100 @@
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ const TEST_URI = "data:text/html;charset=utf-8,<p>test for bug 642615";
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
+                                    "@mozilla.org/widget/clipboardhelper;1",
+                                    "nsIClipboardHelper");
+ 
+-function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
+-
+-  openConsole();
+-
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  let HUD = HUDService.hudReferences[hudId];
++function consoleOpened(HUD) {
+   let jsterm = HUD.jsterm;
+   let stringToCopy = "foobazbarBug642615";
+ 
+   jsterm.clearOutput();
+ 
+   ok(!jsterm.completeNode.value, "no completeNode.value");
+ 
+   jsterm.setInputValue("doc");
+ 
++  let completionValue;
++
+   // wait for key "u"
+-  jsterm.inputNode.addEventListener("keyup", function() {
+-    jsterm.inputNode.removeEventListener("keyup", arguments.callee, false);
+-
+-    let completionValue = jsterm.completeNode.value;
+-    ok(completionValue, "we have a completeNode.value");
+-
+-    // wait for paste
+-    jsterm.inputNode.addEventListener("input", function() {
+-      jsterm.inputNode.removeEventListener("input", arguments.callee, false);
+-
+-      ok(!jsterm.completeNode.value, "no completeNode.value after clipboard paste");
+-
+-      // wait for undo
+-      jsterm.inputNode.addEventListener("input", function() {
+-        jsterm.inputNode.removeEventListener("input", arguments.callee, false);
+-
+-        is(jsterm.completeNode.value, completionValue,
+-           "same completeNode.value after undo");
+-
+-        // wait for paste (via keyboard event)
+-        jsterm.inputNode.addEventListener("keyup", function() {
+-          jsterm.inputNode.removeEventListener("keyup", arguments.callee, false);
+-
+-          ok(!jsterm.completeNode.value,
+-             "no completeNode.value after clipboard paste (via keyboard event)");
+-
+-          executeSoon(finishTest);
+-        }, false);
+-
+-        EventUtils.synthesizeKey("v", {accelKey: true});
+-      }, false);
+-
+-      goDoCommand("cmd_undo");
+-    }, false);
++  function onCompletionValue() {
++    completionValue = jsterm.completeNode.value;
+ 
+     // Arguments: expected, setup, success, failure.
+     waitForClipboard(
+       stringToCopy,
+       function() {
+         clipboardHelper.copyString(stringToCopy);
+       },
+-      function() {
+-        updateEditUIVisibility();
+-        goDoCommand("cmd_paste");
++      onClipboardCopy,
++      finishTest);
++  }
++
++  function onClipboardCopy() {
++    updateEditUIVisibility();
++    goDoCommand("cmd_paste");
++
++    waitForSuccess(waitForPaste);
++  }
++
++  let waitForPaste = {
++    name: "no completion value after paste",
++    validatorFn: function()
++    {
++      return !jsterm.completeNode.value;
++    },
++    successFn: onClipboardPaste,
++    failureFn: finishTest,
++  };
++
++  function onClipboardPaste() {
++    goDoCommand("cmd_undo");
++    waitForSuccess({
++      name: "completion value for 'docu' after undo",
++      validatorFn: function()
++      {
++        return !!jsterm.completeNode.value;
+       },
+-      finish);
+-  }, false);
++      successFn: onCompletionValueAfterUndo,
++      failureFn: finishTest,
++    });
++  }
++
++  function onCompletionValueAfterUndo() {
++    is(jsterm.completeNode.value, completionValue,
++       "same completeNode.value after undo");
++
++    EventUtils.synthesizeKey("v", {accelKey: true});
++    waitForSuccess({
++      name: "no completion after ctrl-v (paste)",
++      validatorFn: function()
++      {
++        return !jsterm.completeNode.value;
++      },
++      successFn: finishTest,
++      failureFn: finishTest,
++    });
++  }
+ 
+   EventUtils.synthesizeKey("u", {});
++
++  waitForSuccess({
++    name: "completion value for 'docu'",
++    validatorFn: function()
++    {
++      return !!jsterm.completeNode.value;
++    },
++    successFn: onCompletionValue,
++    failureFn: finishTest,
++  });
+ }
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("load", tabLoad, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+@@ -1,48 +1,46 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  */
+ 
+ // Tests that document.body autocompletes in the web console.
+ 
+-let tempScope = {};
+-Cu.import("resource:///modules/PropertyPanel.jsm", tempScope);
+-let PropertyPanel = tempScope.PropertyPanel;
+-let PropertyTreeView = tempScope.PropertyTreeView;
+-let namesAndValuesOf = tempScope.namesAndValuesOf;
+-let isNonNativeGetter = tempScope.isNonNativeGetter;
+-
+ function test() {
+   addTab("data:text/html;charset=utf-8,Web Console autocompletion bug in document.body");
+-  browser.addEventListener("load", onLoad, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
+ }
+ 
+ var gHUD;
+ 
+-function onLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
+-  openConsole();
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  gHUD = HUDService.hudReferences[hudId];
++function consoleOpened(aHud) {
++  gHUD = aHud;
+   let jsterm = gHUD.jsterm;
+   let popup = jsterm.autocompletePopup;
+   let completeNode = jsterm.completeNode;
+ 
++  let tmp = {};
++  Cu.import("resource:///modules/WebConsoleUtils.jsm", tmp);
++  let WCU = tmp.WebConsoleUtils;
++  tmp = null;
++
+   ok(!popup.isOpen, "popup is not open");
+ 
+-  popup._panel.addEventListener("popupshown", function() {
+-    popup._panel.removeEventListener("popupshown", arguments.callee, false);
++  popup._panel.addEventListener("popupshown", function onShown() {
++    popup._panel.removeEventListener("popupshown", onShown, false);
+ 
+     ok(popup.isOpen, "popup is open");
+ 
+-    let props = namesAndValuesOf(content.wrappedJSObject.document.body).length;
+-    is(popup.itemCount, props, "popup.itemCount is correct");
++    let props = WCU.namesAndValuesOf(content.wrappedJSObject.document.body);
++    is(popup.itemCount, props.length, "popup.itemCount is correct");
+ 
+     popup._panel.addEventListener("popuphidden", autocompletePopupHidden, false);
+ 
+     EventUtils.synthesizeKey("VK_ESCAPE", {});
+   }, false);
+ 
+   jsterm.setInputValue("document.body");
+   EventUtils.synthesizeKey(".", {});
+@@ -50,37 +48,81 @@ function onLoad(aEvent) {
+ 
+ function autocompletePopupHidden()
+ {
+   let jsterm = gHUD.jsterm;
+   let popup = jsterm.autocompletePopup;
+   let completeNode = jsterm.completeNode;
+   let inputNode = jsterm.inputNode;
+ 
+-  popup._panel.removeEventListener("popuphidden", arguments.callee, false);
++  popup._panel.removeEventListener("popuphidden", autocompletePopupHidden, false);
+ 
+   ok(!popup.isOpen, "popup is not open");
+   let inputStr = "document.b";
+   jsterm.setInputValue(inputStr);
+   EventUtils.synthesizeKey("o", {});
+   let testStr = inputStr.replace(/./g, " ") + " ";
+-  is(completeNode.value, testStr + "dy", "completeNode is empty");
+-  jsterm.setInputValue("");
+ 
+-  // Check the property panel as well. It's a bit gross to parse the properties
+-  // out of the treeView cell text, but nsITreeView doesn't give us a good
+-  // structured way to get at the data. :-(
+-  let propPanel = jsterm.openPropertyPanel("Test", content.document);
++  waitForSuccess({
++    name: "autocomplete shows document.body",
++    validatorFn: function()
++    {
++      return completeNode.value == testStr + "dy";
++    },
++    successFn: testPropertyPanel,
++    failureFn: finishTest,
++  });
++}
++
++function testPropertyPanel()
++{
++  let jsterm = gHUD.jsterm;
++  jsterm.clearOutput();
++  jsterm.setInputValue("document");
++  jsterm.execute();
++
++  waitForSuccess({
++    name: "jsterm document object output",
++    validatorFn: function()
++    {
++      return gHUD.outputNode.querySelector(".webconsole-msg-output");
++    },
++    successFn: function()
++    {
++      document.addEventListener("popupshown", function onShown(aEvent) {
++        document.removeEventListener("popupshown", onShown, false);
++        executeSoon(propertyPanelShown.bind(null, aEvent.target));
++      }, false);
++
++      let node = gHUD.outputNode.querySelector(".webconsole-msg-output");
++      EventUtils.synthesizeMouse(node, 2, 2, {});
++    },
++    failureFn: finishTest,
++  });
++}
++
++function propertyPanelShown(aPanel)
++{
++  let tree = aPanel.querySelector("tree");
++  let view = tree.view;
++  let col = tree.columns[0];
++  ok(view.rowCount, "Property Panel rowCount");
++
++  let foundBody = false;
+   let propPanelProps = [];
+-  for (let idx = 0; idx < propPanel.treeView.rowCount; ++idx)
+-    propPanelProps.push(propPanel.treeView.getCellText(idx, null).split(':')[0]);
++  for (let idx = 0; idx < view.rowCount; ++idx) {
++    let text = view.getCellText(idx, col);
++    if (text == "body: HTMLBodyElement" || text == "body: Object")
++      foundBody = true;
++    propPanelProps.push(text.split(":")[0]);
++  }
++
+   // NB: We pull the properties off the prototype, rather than off object itself,
+   // so that expandos like |constructor|, which the propPanel can't see, are not
+   // included.
+   for (let prop in Object.getPrototypeOf(content.document))
+     ok(propPanelProps.indexOf(prop) != -1, "Property |" + prop + "| should be reflected in propertyPanel");
+ 
+-  let treeRows = propPanel.treeView._rows;
+-  is (treeRows[30].display, "body: Object",  "found document.body");
+-  propPanel.destroy();
++  ok(foundBody, "found document.body");
++
+   executeSoon(finishTest);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
+@@ -35,21 +35,19 @@
+  * and other provisions required by the GPL or the LGPL. If you do not delete
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that the $0 console helper works as intended.
+ 
+-let doc;
+-let h1;
+-
+ function createDocument()
+ {
++  let doc = content.document;
+   let div = doc.createElement("div");
+   let h1 = doc.createElement("h1");
+   let p1 = doc.createElement("p");
+   let p2 = doc.createElement("p");
+   let div2 = doc.createElement("div");
+   let p3 = doc.createElement("p");
+   doc.title = "Inspector Tree Selection Test";
+   h1.textContent = "Inspector Tree Selection Test";
+@@ -74,74 +72,104 @@ function createDocument()
+   div2.appendChild(p3);
+   doc.body.appendChild(div);
+   doc.body.appendChild(div2);
+   setupHighlighterTests();
+ }
+ 
+ function setupHighlighterTests()
+ {
+-  h1 = doc.querySelectorAll("h1")[0];
++  let h1 = content.document.querySelector("h1");
+   ok(h1, "we have the header node");
+   Services.obs.addObserver(runSelectionTests,
+     InspectorUI.INSPECTOR_NOTIFICATIONS.OPENED, false);
+   InspectorUI.toggleInspectorUI();
+ }
+ 
+ function runSelectionTests()
+ {
+   Services.obs.removeObserver(runSelectionTests,
+     InspectorUI.INSPECTOR_NOTIFICATIONS.OPENED, false);
+ 
+   executeSoon(function() {
+     InspectorUI.highlighter.addListener("nodeselected", performTestComparisons);
++    let h1 = content.document.querySelector("h1");
+     EventUtils.synthesizeMouse(h1, 2, 2, {type: "mousemove"}, content);
+   });
+ }
+ 
+ function performTestComparisons()
+ {
+   InspectorUI.highlighter.removeListener("nodeselected", performTestComparisons);
+ 
+   InspectorUI.stopInspecting();
++
++  let h1 = content.document.querySelector("h1");
+   is(InspectorUI.highlighter.node, h1, "node selected");
+   is(InspectorUI.selection, h1, "selection matches node");
+ 
+   openConsole(gBrowser.selectedTab, performWebConsoleTests);
+ }
+ 
+ function performWebConsoleTests(hud)
+ {
+   let jsterm = hud.jsterm;
+   outputNode = hud.outputNode;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("$0");
+-  findLogEntry("[object HTMLHeadingElement");
+ 
+-  jsterm.clearOutput();
+-  let msg = "foo";
+-  jsterm.execute("$0.textContent = '" + msg + "'");
+-  findLogEntry(msg);
+-  is(InspectorUI.selection.textContent, msg, "node successfully updated");
++  waitForSuccess({
++    name: "$0 output",
++    validatorFn: function()
++    {
++      return outputNode.querySelector(".webconsole-msg-output");
++    },
++    successFn: function()
++    {
++      let node = outputNode.querySelector(".webconsole-msg-output");
++      isnot(node.textContent.indexOf("[object HTMLHeadingElement"), -1,
++            "correct output for $0");
+ 
+-  doc = h1 = null;
+-  executeSoon(finishUp);
++      jsterm.clearOutput();
++      jsterm.execute("$0.textContent = 'bug653531'");
++      waitForSuccess(waitForNodeUpdate);
++    },
++    failureFn: finishUp,
++  });
++
++  let waitForNodeUpdate = {
++    name: "$0.textContent update",
++    validatorFn: function()
++    {
++      return outputNode.querySelector(".webconsole-msg-output");
++    },
++    successFn: function()
++    {
++      let node = outputNode.querySelector(".webconsole-msg-output");
++      isnot(node.textContent.indexOf("bug653531"), -1,
++            "correct output for $0.textContent");
++      is(InspectorUI.selection.textContent, "bug653531",
++         "node successfully updated");
++
++      executeSoon(finishUp);
++    },
++    failureFn: finishUp,
++  };
+ }
+ 
+ function finishUp() {
+   InspectorUI.closeInspectorUI();
+   finishTest();
+ }
+ 
+ function test()
+ {
+   waitForExplicitFinish();
+   gBrowser.selectedTab = gBrowser.addTab();
+   gBrowser.selectedBrowser.addEventListener("load", function() {
+     gBrowser.selectedBrowser.removeEventListener("load", arguments.callee, true);
+-    doc = content.document;
+     waitForFocus(createDocument, content);
+   }, true);
+ 
+   content.location = "data:text/html;charset=utf-8,test for highlighter helper in web console";
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_chrome.js b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_chrome.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
+@@ -36,16 +36,17 @@
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that code completion works properly.
+ 
+ function test() {
++  expectUncaughtException();
+   addTab(getBrowserURL());
+   browser.addEventListener("DOMContentLoaded", function onLoad() {
+     browser.removeEventListener("DOMContentLoaded", onLoad, true);
+     openConsole();
+     testChrome(HUDService.getHudByWindow(content));
+   }, true);
+ }
+ 
+@@ -58,15 +59,17 @@ function testChrome(hud) {
+   ok(jsterm, "we have a jsterm");
+ 
+   let input = jsterm.inputNode;
+   ok(hud.outputNode, "we have an output node");
+ 
+   // Test typing 'docu'.
+   input.value = "docu";
+   input.setSelectionRange(4, 4);
+-  jsterm.complete(jsterm.COMPLETE_HINT_ONLY);
+-  is(jsterm.completeNode.value, "    ment", "'docu' completion");
+-
+-  gBrowser.removeCurrentTab();
+-  executeSoon(finishTest);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, function() {
++    is(jsterm.completeNode.value, "    ment", "'docu' completion");
++    executeSoon(function() {
++      gBrowser.removeCurrentTab();
++      executeSoon(finishTest);
++    });
++  });
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_completion.js b/browser/devtools/webconsole/test/browser_webconsole_completion.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_completion.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_completion.js
+@@ -35,74 +35,98 @@
+  * and other provisions required by the GPL or the LGPL. If you do not delete
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that code completion works properly.
+ 
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
++const TEST_URI = "data:text/html;charset=utf8,<p>test code completion";
++
++let testDriver;
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testCompletion, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, function(hud) {
++      testDriver = testCompletion(hud);
++      testDriver.next();
++    });
++  }, true);
+ }
+ 
+-function testCompletion() {
+-  browser.removeEventListener("DOMContentLoaded", testCompletion, false);
++function testNext() {
++  executeSoon(function() {
++    testDriver.next();
++  });
++}
+ 
+-  openConsole();
+-
+-  var jsterm = HUDService.getHudByWindow(content).jsterm;
+-  var input = jsterm.inputNode;
++function testCompletion(hud) {
++  let jsterm = hud.jsterm;
++  let input = jsterm.inputNode;
+ 
+   // Test typing 'docu'.
+   input.value = "docu";
+   input.setSelectionRange(4, 4);
+-  jsterm.complete(jsterm.COMPLETE_HINT_ONLY);
+-  is(input.value, "docu", "'docu' completion");
+-  is(jsterm.completeNode.value, "    ment", "'docu' completion");
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield;
++
++  is(input.value, "docu", "'docu' completion (input.value)");
++  is(jsterm.completeNode.value, "    ment", "'docu' completion (completeNode)");
+ 
+   // Test typing 'docu' and press tab.
+   input.value = "docu";
+   input.setSelectionRange(4, 4);
+-  jsterm.complete(jsterm.COMPLETE_FORWARD);
++  jsterm.complete(jsterm.COMPLETE_FORWARD, testNext);
++  yield;
++
+   is(input.value, "document", "'docu' tab completion");
+   is(input.selectionStart, 8, "start selection is alright");
+   is(input.selectionEnd, 8, "end selection is alright");
+   is(jsterm.completeNode.value.replace(/ /g, ""), "", "'docu' completed");
+ 
+   // Test typing 'document.getElem'.
+   input.value = "document.getElem";
+   input.setSelectionRange(16, 16);
+-  jsterm.complete(jsterm.COMPLETE_FORWARD);
++  jsterm.complete(jsterm.COMPLETE_FORWARD, testNext);
++  yield;
++
+   is(input.value, "document.getElem", "'document.getElem' completion");
+   is(jsterm.completeNode.value, "                entById", "'document.getElem' completion");
+ 
+   // Test pressing tab another time.
+-  jsterm.complete(jsterm.COMPLETE_FORWARD);
++  jsterm.complete(jsterm.COMPLETE_FORWARD, testNext);
++  yield;
++
+   is(input.value, "document.getElem", "'document.getElem' completion");
+   is(jsterm.completeNode.value, "                entsByClassName", "'document.getElem' another tab completion");
+ 
+   // Test pressing shift_tab.
+-  jsterm.complete(jsterm.COMPLETE_BACKWARD);
++  jsterm.complete(jsterm.COMPLETE_BACKWARD, testNext);
++  yield;
++
+   is(input.value, "document.getElem", "'document.getElem' untab completion");
+   is(jsterm.completeNode.value, "                entById", "'document.getElem' completion");
+ 
+   jsterm.clearOutput();
+-  jsterm.history.splice(0, jsterm.history.length);   // workaround for bug 592552
+ 
+   input.value = "docu";
+-  jsterm.complete(jsterm.COMPLETE_HINT_ONLY);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield;
++
+   is(jsterm.completeNode.value, "    ment", "'docu' completion");
+   jsterm.execute();
+   is(jsterm.completeNode.value, "", "clear completion on execute()");
+ 
+   // Test multi-line completion works
+   input.value =                 "console.log('one');\nconsol";
+-  jsterm.complete(jsterm.COMPLETE_HINT_ONLY);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield;
++
+   is(jsterm.completeNode.value, "                   \n      e", "multi-line completion");
+ 
+-  jsterm = input = null;
+-  finishTest();
++  testDriver = jsterm = input = null;
++  executeSoon(finishTest);
++  yield;
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
+@@ -49,22 +49,32 @@ function test() {
+     openConsole(null, testExecutionScope);
+   }, true);
+ }
+ 
+ function testExecutionScope(hud) {
+   let jsterm = hud.jsterm;
+ 
+   jsterm.clearOutput();
+-  jsterm.execute("location;");
++  jsterm.execute("window.location;");
+ 
+-  let nodes = jsterm.outputNode.querySelectorAll(".hud-msg-node");
+-  is(nodes.length, 2, "Two children in output");
++  waitForSuccess({
++    name: "jsterm execution output (two nodes)",
++    validatorFn: function()
++    {
++      return jsterm.outputNode.querySelectorAll(".hud-msg-node").length == 2;
++    },
++    successFn: function()
++    {
++      let nodes = jsterm.outputNode.querySelectorAll(".hud-msg-node");
+ 
+-  is(/location;/.test(nodes[0].textContent), true,
+-     "'location;' written to output");
++      is(/window.location;/.test(nodes[0].textContent), true,
++        "'window.location;' written to output");
+ 
+-  ok(nodes[0].textContent.indexOf(TEST_URI),
+-    "command was executed in the window scope");
++      isnot(nodes[1].textContent.indexOf(TEST_URI), -1,
++        "command was executed in the window scope");
+ 
+-  executeSoon(finishTest);
++      executeSoon(finishTest);
++    },
++    failureFn: finishTest,
++  });
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_for_of.js b/browser/devtools/webconsole/test/browser_webconsole_for_of.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_for_of.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_for_of.js
+@@ -2,27 +2,34 @@
+  * http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ // A for-of loop in Web Console code can loop over a content NodeList.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-for-of.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testForOf, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, testForOf);
++  }, true);
+ }
+ 
+-function testForOf() {
+-  browser.removeEventListener("DOMContentLoaded", testForOf, false);
+-
+-  openConsole();
+-  var hud = HUDService.getHudByWindow(content);
++function testForOf(hud) {
+   var jsterm = hud.jsterm;
+   jsterm.execute("{ [x.tagName for (x of document.body.childNodes) if (x.nodeType === 1)].join(' '); }");
+ 
+-  let node = hud.outputNode.querySelector(".webconsole-msg-output");
+-  ok(/H1 DIV H2 P/.test(node.textContent),
+-    "for-of loop should find all top-level nodes");
+-
+-  jsterm.clearOutput();
+-  jsterm.history.splice(0, jsterm.history.length);   // workaround for bug 592552
+-  finishTest();
++  waitForSuccess({
++    name: "jsterm output displayed",
++    validatorFn: function()
++    {
++      return hud.outputNode.querySelector(".webconsole-msg-output");
++    },
++    successFn: function()
++    {
++      let node = hud.outputNode.querySelector(".webconsole-msg-output");
++      ok(/H1 DIV H2 P/.test(node.textContent),
++        "for-of loop should find all top-level nodes");
++      finishTest();
++    },
++    failureFn: finishTest,
++  });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js b/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
+@@ -40,43 +40,43 @@
+ 
+ // Tests that the correct CSS styles are applied to the lines of console
+ // output.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testJSInputAndOutputStyling,
+-                           false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, testJSInputAndOutputStyling);
++  }, true);
+ }
+ 
+-function testJSInputAndOutputStyling() {
+-  browser.removeEventListener("DOMContentLoaded",
+-                              testJSInputAndOutputStyling, false);
+-
+-  openConsole();
+-
+-  let jsterm = HUDService.getHudByWindow(content).jsterm;
++function testJSInputAndOutputStyling(hud) {
++  let jsterm = hud.jsterm;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("2 + 2");
+ 
+-  let nodes = jsterm.outputNode.querySelectorAll(".hud-msg-node");
+-  let jsInputNode = nodes[0];
++  let jsInputNode = jsterm.outputNode.querySelector(".hud-msg-node");
+   isnot(jsInputNode.textContent.indexOf("2 + 2"), -1,
+         "JS input node contains '2 + 2'");
+   ok(jsInputNode.classList.contains("webconsole-msg-input"),
+      "JS input node is of the CSS class 'webconsole-msg-input'");
+ 
+-  let jsOutputNodes = jsterm.outputNode.
+-                      querySelectorAll(".webconsole-msg-output");
+-  isnot(jsOutputNodes[0].textContent.indexOf("4"), -1,
+-        "JS output node contains '4'");
+-  ok(jsOutputNodes[0].classList.contains("webconsole-msg-output"),
+-     "JS output node is of the CSS class 'webconsole-msg-output'");
+-
+-  jsterm.clearOutput();
+-  jsterm.history.splice(0, jsterm.history.length);   // workaround for bug 592552
+-
+-  finishTest();
++  waitForSuccess({
++    name: "jsterm output is displayed",
++    validatorFn: function()
++    {
++      return jsterm.outputNode.querySelector(".webconsole-msg-output");
++    },
++    successFn: function()
++    {
++      let node = jsterm.outputNode.querySelector(".webconsole-msg-output");
++      isnot(node.textContent.indexOf("4"), -1,
++            "JS output node contains '4'");
++      finishTest();
++    },
++    failureFn: finishTest,
++  });
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+@@ -36,123 +36,203 @@
+  * and other provisions required by the GPL or the LGPL. If you do not delete
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+-let jsterm;
++let jsterm, testDriver;
+ 
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+-    openConsole(null, testJSTerm);
++    openConsole(null, function(hud) {
++      testDriver = testJSTerm(hud);
++      testDriver.next();
++    });
+   }, true);
+ }
+ 
++function nextTest() {
++  testDriver.next();
++}
++
+ function checkResult(msg, desc, lines) {
+-  let labels = jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
+-  is(labels.length, lines, "correct number of results shown for " + desc);
+-  is(labels[lines-1].textContent.trim(), msg, "correct message shown for " +
+-    desc);
++  waitForSuccess({
++    name: "correct number of results shown for " + desc,
++    validatorFn: function()
++    {
++      let nodes = jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
++      return nodes.length == lines;
++    },
++    successFn: function()
++    {
++      let labels = jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
++      if (typeof msg == "string") {
++        is(labels[lines-1].textContent.trim(), msg,
++           "correct message shown for " + desc);
++      }
++      else if (typeof msg == "function") {
++        ok(msg(labels), "correct message shown for " + desc);
++      }
++
++      nextTest();
++    },
++    failureFn: nextTest,
++  });
+ }
+ 
+ function testJSTerm(hud)
+ {
+   jsterm = hud.jsterm;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("'id=' + $('header').getAttribute('id')");
+   checkResult('"id=header"', "$() worked", 1);
++  yield;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("headerQuery = $$('h1')");
+   jsterm.execute("'length=' + headerQuery.length");
+   checkResult('"length=1"', "$$() worked", 2);
++  yield;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("xpathQuery = $x('.//*', document.body);");
+   jsterm.execute("'headerFound='  + (xpathQuery[0] == headerQuery[0])");
+   checkResult('"headerFound=true"', "$x() worked", 2);
++  yield;
+ 
+   // no jsterm.clearOutput() here as we clear the output using the clear() fn.
+   jsterm.execute("clear()");
+-  let group = jsterm.outputNode.querySelector(".hud-group");
+-  ok(!group, "clear() worked");
++
++  waitForSuccess({
++    name: "clear() worked",
++    validatorFn: function()
++    {
++      return jsterm.outputNode.childNodes.length == 0;
++    },
++    successFn: nextTest,
++    failureFn: nextTest,
++  });
++
++  yield;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("'keysResult=' + (keys({b:1})[0] == 'b')");
+   checkResult('"keysResult=true"', "keys() worked", 1);
++  yield;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("'valuesResult=' + (values({b:1})[0] == 1)");
+   checkResult('"valuesResult=true"', "values() worked", 1);
++  yield;
+ 
+   jsterm.clearOutput();
++
++  let tabs = gBrowser.tabs.length;
++
+   jsterm.execute("help()");
+   let output = jsterm.outputNode.querySelector(".webconsole-msg-output");
+-  ok(!group, "help() worked");
++  ok(!output, "help() worked");
+ 
+   jsterm.execute("help");
+   output = jsterm.outputNode.querySelector(".webconsole-msg-output");
+   ok(!output, "help worked");
+ 
+   jsterm.execute("?");
+   output = jsterm.outputNode.querySelector(".webconsole-msg-output");
+   ok(!output, "? worked");
+ 
++  let foundTab = null;
++  waitForSuccess({
++    name: "help tab opened",
++    timeout: 10000,
++    validatorFn: function()
++    {
++      let newTabOpen = gBrowser.tabs.length == tabs + 1;
++      if (!newTabOpen) {
++        return false;
++      }
++
++      foundTab = null;
++      Array.some(gBrowser.tabs, function(tab) {
++        let win = tab.linkedBrowser.contentWindow;
++        let match = win.location.href.indexOf("developer.mozilla.org") > -1;
++        if (match) {
++          foundTab = tab;
++        }
++        return match;
++      });
++
++      return foundTab;
++    },
++    successFn: function()
++    {
++      gBrowser.removeTab(foundTab);
++      nextTest();
++    },
++    failureFn: nextTest,
++  });
++  yield;
++
+   jsterm.clearOutput();
+   jsterm.execute("pprint({b:2, a:1})");
+-  // Doesn't conform to checkResult format
+-  let label = jsterm.outputNode.querySelector(".webconsole-msg-output");
+-  is(label.textContent.trim(), "a: 1\n  b: 2", "pprint() worked");
++  checkResult("a: 1\n  b: 2", "pprint()", 1);
++  yield;
+ 
+   // check instanceof correctness, bug 599940
+   jsterm.clearOutput();
+   jsterm.execute("[] instanceof Array");
+   checkResult("true", "[] instanceof Array == true", 1);
++  yield;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("({}) instanceof Object");
+   checkResult("true", "({}) instanceof Object == true", 1);
++  yield;
+ 
+   // check for occurrences of Object XRayWrapper, bug 604430
+   jsterm.clearOutput();
+   jsterm.execute("document");
+-  let label = jsterm.outputNode.querySelector(".webconsole-msg-output");
+-  is(label.textContent.trim().search(/\[object XrayWrapper/), -1,
+-    "check for non-existence of [object XrayWrapper ");
++  checkResult(function(nodes) {
++    return nodes[0].textContent.search(/\[object xraywrapper/i) == -1;
++  }, "document - no XrayWrapper", 1);
++  yield;
+ 
+   // check that pprint(window) and keys(window) don't throw, bug 608358
+   jsterm.clearOutput();
+   jsterm.execute("pprint(window)");
+-  let labels = jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
+-  is(labels.length, 1, "one line of output for pprint(window)");
++  checkResult(null, "pprint(window)", 1);
++  yield;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("keys(window)");
+-  labels = jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
+-  is(labels.length, 1, "one line of output for keys(window)");
++  checkResult(null, "keys(window)", 1);
++  yield;
+ 
++  // bug 614561
+   jsterm.clearOutput();
+   jsterm.execute("pprint('hi')");
+-  // Doesn't conform to checkResult format, bug 614561
+-  let label = jsterm.outputNode.querySelector(".webconsole-msg-output");
+-  is(label.textContent.trim(), '0: "h"\n  1: "i"', 'pprint("hi") worked');
++  checkResult('0: "h"\n  1: "i"', "pprint('hi')", 1);
++  yield;
+ 
+   // check that pprint(function) shows function source, bug 618344
+   jsterm.clearOutput();
+   jsterm.execute("pprint(print)");
+-  label = jsterm.outputNode.querySelector(".webconsole-msg-output");
+-  isnot(label.textContent.indexOf("SEVERITY_LOG"), -1,
+-        "pprint(function) shows function source");
++  checkResult(function(nodes) {
++    return nodes[0].textContent.indexOf("aJSTerm.") > -1;
++  }, "pprint(function) shows source", 1);
++  yield;
+ 
+   // check that an evaluated null produces "null", bug 650780
+   jsterm.clearOutput();
+   jsterm.execute("null");
+   checkResult("null", "null is null", 1);
++  yield;
+ 
+-  jsterm = null;
++  jsterm = testDriver = null;
+   executeSoon(finishTest);
++  yield;
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js b/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
+@@ -53,22 +53,45 @@ function test() {
+ 
+ function testNullAndUndefinedOutput(hud) {
+   let jsterm = hud.jsterm;
+   let outputNode = jsterm.outputNode;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("null;");
+ 
+-  let nodes = outputNode.querySelectorAll(".hud-msg-node");
+-  is(nodes.length, 2, "2 nodes in output");
+-  ok(nodes[1].textContent.indexOf("null") > -1, "'null' printed to output");
++  waitForSuccess({
++    name: "null displayed",
++    validatorFn: function()
++    {
++      return outputNode.querySelectorAll(".hud-msg-node").length == 2;
++    },
++    successFn: function()
++    {
++      let nodes = outputNode.querySelectorAll(".hud-msg-node");
++      isnot(nodes[1].textContent.indexOf("null"), -1,
++            "'null' printed to output");
+ 
+-  jsterm.clearOutput();
+-  jsterm.execute("undefined;");
++      jsterm.clearOutput();
++      jsterm.execute("undefined;");
++      waitForSuccess(waitForUndefined);
++    },
++    failureFn: finishTest,
++  });
+ 
+-  nodes = outputNode.querySelectorAll(".hud-msg-node");
+-  is(nodes.length, 2, "2 nodes in output");
+-  ok(nodes[1].textContent.indexOf("undefined") > -1, "'undefined' printed to output");
++  let waitForUndefined = {
++    name: "undefined displayed",
++    validatorFn: function()
++    {
++      return outputNode.querySelectorAll(".hud-msg-node").length == 2;
++    },
++    successFn: function()
++    {
++      let nodes = outputNode.querySelectorAll(".hud-msg-node");
++      isnot(nodes[1].textContent.indexOf("undefined"), -1,
++            "'undefined' printed to output");
+ 
+-  executeSoon(finishTest);
++      finishTest();
++    },
++    failureFn: finishTest,
++  };
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_order.js b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_order.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
+@@ -66,15 +66,14 @@ function testOutputOrder(hud) {
+     },
+     successFn: function()
+     {
+       let nodes = outputNode.querySelectorAll(".hud-msg-node");
+       let executedStringFirst =
+         /console\.log\('foo', 'bar'\);/.test(nodes[0].textContent);
+       let outputSecond = /foo bar/.test(nodes[2].textContent);
+       ok(executedStringFirst && outputSecond, "executed string comes first");
+-      jsterm.clearOutput();
+-      jsterm.history.splice(0, jsterm.history.length);   // workaround for bug 592552
++
+       finishTest();
+     },
+     failureFn: finishTest,
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_panel.js b/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
+@@ -36,61 +36,68 @@
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests the functionality of the "property panel", which allows JavaScript
+ // objects and DOM nodes to be inspected.
+ 
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
++const TEST_URI = "data:text/html;charset=utf8,<p>property panel test";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testPropertyPanel, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, testPropertyPanel);
++  }, true);
+ }
+ 
+-function testPropertyPanel() {
+-  browser.removeEventListener("DOMContentLoaded", testPropertyPanel, false);
++function testPropertyPanel(hud) {
++  let jsterm = hud.jsterm;
+ 
+-  openConsole();
+-
+-  var jsterm = HUDService.getHudByWindow(content).jsterm;
+-
+-  let propPanel = jsterm.openPropertyPanel("Test", [
+-    1,
+-    /abc/,
+-    null,
+-    undefined,
+-    function test() {},
+-    {}
+-  ]);
++  let propPanel = jsterm.openPropertyPanel({
++    data: {
++      object: [
++        1,
++        /abc/,
++        null,
++        undefined,
++        function test() {},
++        {}
++      ]
++    }
++  });
+   is (propPanel.treeView.rowCount, 6, "six elements shown in propertyPanel");
+   propPanel.destroy();
+ 
+-  propPanel = jsterm.openPropertyPanel("Test2", {
+-    "0.02": 0,
+-    "0.01": 1,
+-    "02":   2,
+-    "1":    3,
+-    "11":   4,
+-    "1.2":  5,
+-    "1.1":  6,
+-    "foo":  7,
+-    "bar":  8
++  propPanel = jsterm.openPropertyPanel({
++    data: {
++      object: {
++        "0.02": 0,
++        "0.01": 1,
++        "02":   2,
++        "1":    3,
++        "11":   4,
++        "1.2":  5,
++        "1.1":  6,
++        "foo":  7,
++        "bar":  8
++      }
++    }
+   });
+   is (propPanel.treeView.rowCount, 9, "nine elements shown in propertyPanel");
+ 
+-  let treeRows = propPanel.treeView._rows;
+-  is (treeRows[0].display, "0.01: 1", "1. element is okay");
+-  is (treeRows[1].display, "0.02: 0", "2. element is okay");
+-  is (treeRows[2].display, "1: 3",    "3. element is okay");
+-  is (treeRows[3].display, "1.1: 6",  "4. element is okay");
+-  is (treeRows[4].display, "1.2: 5",  "5. element is okay");
+-  is (treeRows[5].display, "02: 2",   "6. element is okay");
+-  is (treeRows[6].display, "11: 4",   "7. element is okay");
+-  is (treeRows[7].display, "bar: 8",  "8. element is okay");
+-  is (treeRows[8].display, "foo: 7",  "9. element is okay");
++  let view = propPanel.treeView;
++  is (view.getCellText(0), "0.01: 1", "1. element is okay");
++  is (view.getCellText(1), "0.02: 0", "2. element is okay");
++  is (view.getCellText(2), "1: 3",    "3. element is okay");
++  is (view.getCellText(3), "1.1: 6",  "4. element is okay");
++  is (view.getCellText(4), "1.2: 5",  "5. element is okay");
++  is (view.getCellText(5), "02: 2",   "6. element is okay");
++  is (view.getCellText(6), "11: 4",   "7. element is okay");
++  is (view.getCellText(7), "bar: 8",  "8. element is okay");
++  is (view.getCellText(8), "foo: 7",  "9. element is okay");
+   propPanel.destroy();
+ 
+-  finishTest();
++  executeSoon(finishTest);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_provider.js b/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
+@@ -36,48 +36,42 @@
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests the property provider, which is part of the code completion
+ // infrastructure.
+ 
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
++const TEST_URI = "data:text/html;charset=utf8,<p>test the JS property provider";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testPropertyProvider, false);
++  browser.addEventListener("load", testPropertyProvider, true);
+ }
+ 
+ function testPropertyProvider() {
+-  browser.removeEventListener("DOMContentLoaded", testPropertyProvider,
+-                              false);
++  browser.removeEventListener("load", testPropertyProvider, true);
+ 
+-  openConsole();
++  let tmp = {};
++  Cu.import("resource:///modules/WebConsoleUtils.jsm", tmp);
++  let JSPropertyProvider = tmp.JSPropertyProvider;
++  tmp = null;
+ 
+-  var HUD = HUDService.getHudByWindow(content);
+-  var jsterm = HUD.jsterm;
+-  var context = jsterm.sandbox.window;
+-  var completion;
+-
+-  // Test if the propertyProvider can be accessed from the jsterm object.
+-  ok (jsterm.propertyProvider !== undefined, "JSPropertyProvider is defined");
+-
+-  completion = jsterm.propertyProvider(context, "thisIsNotDefined");
++  let completion = JSPropertyProvider(content, "thisIsNotDefined");
+   is (completion.matches.length, 0, "no match for 'thisIsNotDefined");
+ 
+   // This is a case the PropertyProvider can't handle. Should return null.
+-  completion = jsterm.propertyProvider(context, "window[1].acb");
++  completion = JSPropertyProvider(content, "window[1].acb");
+   is (completion, null, "no match for 'window[1].acb");
+ 
+   // A very advanced completion case.
+   var strComplete =
+     'function a() { }document;document.getElementById(window.locatio';
+-  completion = jsterm.propertyProvider(context, strComplete);
++  completion = JSPropertyProvider(content, strComplete);
+   ok(completion.matches.length == 2, "two matches found");
+   ok(completion.matchProp == "locatio", "matching part is 'test'");
+   ok(completion.matches[0] == "location", "the first match is 'location'");
+   ok(completion.matches[1] == "locationbar", "the second match is 'locationbar'");
+-  context = completion = null;
++
+   finishTest();
+ }
+ 
