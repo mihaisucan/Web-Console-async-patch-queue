@@ -1,14 +1,109 @@
 # HG changeset patch
 # Parent 83675634200b0d402d7fc873c03fbf9284268bdd
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1336678779 -10800
+# Date 1336682046 -10800
 
-(async-webconsole) Part 4 - Make network logging async
+Bug 673148 - (async-webconsole) Part 4 - Make network logging async
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -1197,10 +1197,955 @@ let ConsoleListener = {
+@@ -12,25 +12,31 @@ let Cc = Components.classes;
+ let Ci = Components.interfaces;
+ let Cu = Components.utils;
+ 
+ let tempScope = {};
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm", tempScope);
+ Cu.import("resource://gre/modules/Services.jsm", tempScope);
+ Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm", tempScope);
+ Cu.import("resource:///modules/WebConsoleUtils.jsm", tempScope);
++Cu.import("resource:///modules/NetworkHelper.jsm", tempScope);
++Cu.import("resource://gre/modules/NetUtil.jsm", tempScope);
+ 
+ let XPCOMUtils = tempScope.XPCOMUtils;
+ let Services = tempScope.Services;
+ let gConsoleStorage = tempScope.ConsoleAPIStorage;
+ let WebConsoleUtils = tempScope.WebConsoleUtils;
+ let l10n = WebConsoleUtils.l10n;
+ let JSPropertyProvider = tempScope.JSPropertyProvider;
++let NetworkHelper = tempScope.NetworkHelper;
++let NetUtil = tempScope.NetUtil;
+ tempScope = null;
+ 
++let activityDistributor = Cc["@mozilla.org/network/http-activity-distributor;1"].getService(Ci.nsIHttpActivityDistributor);
++
+ let _alive = true; // Track if this content script should still be alive.
+ 
+ /**
+  * The Web Console content instance manager.
+  */
+ let Manager = {
+   get window() content,
+   sandbox: null,
+@@ -232,19 +238,21 @@ let Manager = {
+    * you enable.
+    *
+    * Supported features:
+    *    - JSTerm - a JavaScript "terminal" which allows code execution.
+    *    - ConsoleAPI - support for routing the window.console API to the remote
+    *    process.
+    *    - PageError - route all the nsIScriptErrors from the nsIConsoleService
+    *    to the remote process.
++   *    - NetworkMonitor - log all the network activity and send HAR-like
++   *    messages to the remote Web Console process.
+    *
+    * @param string aFeature
+-   *        One of the supported features: JSTerm, ConsoleAPI.
++   *        One of the supported features.
+    * @param object [aMessage]
+    *        Optional JSON message object coming from the remote Web Console
+    *        instance. This can be used for feature-specific options.
+    */
+   enableFeature: function Manager_enableFeature(aFeature, aMessage)
+   {
+     if (this._enabledFeatures.indexOf(aFeature) != -1) {
+       return;
+@@ -255,16 +263,19 @@ let Manager = {
+         JSTerm.init(aMessage);
+         break;
+       case "ConsoleAPI":
+         ConsoleAPIObserver.init(aMessage);
+         break;
+       case "PageError":
+         ConsoleListener.init(aMessage);
+         break;
++      case "NetworkMonitor":
++        NetworkMonitor.init(aMessage);
++        break;
+       default:
+         Cu.reportError("Web Console content: unknown feature " + aFeature);
+         break;
+     }
+ 
+     this._enabledFeatures.push(aFeature);
+   },
+ 
+@@ -289,16 +300,19 @@ let Manager = {
+         JSTerm.destroy();
+         break;
+       case "ConsoleAPI":
+         ConsoleAPIObserver.destroy();
+         break;
+       case "PageError":
+         ConsoleListener.destroy();
+         break;
++      case "NetworkMonitor":
++        NetworkMonitor.destroy();
++        break;
+       default:
+         Cu.reportError("Web Console content: unknown feature " + aFeature);
+         break;
+     }
+   },
+ 
+   /**
+    * Send the cached messages to the remote Web Console instance.
+@@ -1197,10 +1211,955 @@ let ConsoleListener = {
     * Remove the nsIConsoleService listener.
     */
    destroy: function CL_destroy()
@@ -310,7 +405,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +  },
 +
 +  harCreator: {
-+    name: "Firefox Web Console",
++    name: Services.appinfo.name + " - Web Console",
 +    version: Services.appinfo.version,
 +  },
 +
@@ -372,7 +467,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    let channel = aSubject.QueryInterface(Ci.nsIHttpChannel);
 +    // Try to get the source window of the request.
 +    let win = NetworkHelper.getWindowForRequest(channel);
-+    if (!win || win.top !== JSTerm.window) {
++    if (!win || win.top !== Manager.window) {
 +      dump("httpResponseExaminer wrong window\n");
 +      return;
 +    }
@@ -391,7 +486,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    let contentType = null;
 +
 +    channel.visitResponseHeaders({
-+      visitHeader: function _visitHeader(aName, aValue) {
++      visitHeader: function NM__visitHeader(aName, aValue) {
 +        let lowerName = aName.toLowerCase();
 +        if (lowerName == "set-cookie") {
 +          setCookieHeader = aValue;
@@ -539,7 +634,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +    // Copy the request header data.
 +    aChannel.visitRequestHeaders({
-+      visitHeader: function _visitHeader(aName, aValue)
++      visitHeader: function NM__visitHeader(aName, aValue)
 +      {
 +        if (aName == "Cookie") {
 +          cookieHeader = aValue;
@@ -2184,7 +2279,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    },
  
    /**
-@@ -1989,440 +1020,103 @@ HUD_SERVICE.prototype =
+@@ -1989,443 +1020,36 @@ HUD_SERVICE.prototype =
     */
    lastFinishedRequestCallback: null,
  
@@ -2568,93 +2663,73 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -  },
 -
 -  /**
-    * Logs network activity.
-    *
-    * @param object aActivityObject
-    *        The activity to log.
-    * @returns void
-    */
+-   * Logs network activity.
+-   *
+-   * @param object aActivityObject
+-   *        The activity to log.
+-   * @returns void
+-   */
 -  logNetActivity: function HS_logNetActivity(aActivityObject)
-+  // TODO: update the comment
-+  logNetActivity: function HS_logNetActivity(aMessage)
-   {
+-  {
 -    let hudId = aActivityObject.hudId;
 -    let outputNode = this.hudReferences[hudId].outputNode;
 -
 -    let chromeDocument = outputNode.ownerDocument;
-+    let request = aMessage.log.entries[0].request;
-+
-+    let hudId = aMessage.hudId;
-+    let hud = this.hudReferences[hudId];
-+
-+    let chromeDocument = hud.chromeDocument;
-     let msgNode = chromeDocument.createElementNS(XUL_NS, "hbox");
- 
-     let methodNode = chromeDocument.createElementNS(XUL_NS, "label");
+-    let msgNode = chromeDocument.createElementNS(XUL_NS, "hbox");
+-
+-    let methodNode = chromeDocument.createElementNS(XUL_NS, "label");
 -    methodNode.setAttribute("value", aActivityObject.method);
-+    methodNode.setAttribute("value", request.method);
-     methodNode.classList.add("webconsole-msg-body-piece");
-     msgNode.appendChild(methodNode);
- 
-     let linkNode = chromeDocument.createElementNS(XUL_NS, "hbox");
-     linkNode.setAttribute("flex", "1");
-     linkNode.classList.add("webconsole-msg-body-piece");
-     linkNode.classList.add("webconsole-msg-link");
-     msgNode.appendChild(linkNode);
- 
-     let urlNode = chromeDocument.createElementNS(XUL_NS, "label");
-     urlNode.setAttribute("crop", "center");
-     urlNode.setAttribute("flex", "1");
+-    methodNode.classList.add("webconsole-msg-body-piece");
+-    msgNode.appendChild(methodNode);
+-
+-    let linkNode = chromeDocument.createElementNS(XUL_NS, "hbox");
+-    linkNode.setAttribute("flex", "1");
+-    linkNode.classList.add("webconsole-msg-body-piece");
+-    linkNode.classList.add("webconsole-msg-link");
+-    msgNode.appendChild(linkNode);
+-
+-    let urlNode = chromeDocument.createElementNS(XUL_NS, "label");
+-    urlNode.setAttribute("crop", "center");
+-    urlNode.setAttribute("flex", "1");
 -    urlNode.setAttribute("title", aActivityObject.url);
 -    urlNode.setAttribute("value", aActivityObject.url);
-+    urlNode.setAttribute("title", request.url);
-+    urlNode.setAttribute("value", request.url);
-     urlNode.classList.add("hud-clickable");
-     urlNode.classList.add("webconsole-msg-body-piece");
-     urlNode.classList.add("webconsole-msg-url");
-     linkNode.appendChild(urlNode);
- 
-     let statusNode = chromeDocument.createElementNS(XUL_NS, "label");
-     statusNode.setAttribute("value", "");
-     statusNode.classList.add("hud-clickable");
-     statusNode.classList.add("webconsole-msg-body-piece");
-     statusNode.classList.add("webconsole-msg-status");
-     linkNode.appendChild(statusNode);
- 
+-    urlNode.classList.add("hud-clickable");
+-    urlNode.classList.add("webconsole-msg-body-piece");
+-    urlNode.classList.add("webconsole-msg-url");
+-    linkNode.appendChild(urlNode);
+-
+-    let statusNode = chromeDocument.createElementNS(XUL_NS, "label");
+-    statusNode.setAttribute("value", "");
+-    statusNode.classList.add("hud-clickable");
+-    statusNode.classList.add("webconsole-msg-body-piece");
+-    statusNode.classList.add("webconsole-msg-status");
+-    linkNode.appendChild(statusNode);
+-
 -    let clipboardText = aActivityObject.method + " " + aActivityObject.url;
-+    let clipboardText = request.method + " " + request.url;
- 
-     let messageNode = ConsoleUtils.createMessageNode(chromeDocument,
-                                                      CATEGORY_NETWORK,
-                                                      SEVERITY_LOG,
-                                                      msgNode,
-                                                      hudId,
-                                                      null,
-                                                      null,
-                                                      clipboardText);
- 
+-
+-    let messageNode = ConsoleUtils.createMessageNode(chromeDocument,
+-                                                     CATEGORY_NETWORK,
+-                                                     SEVERITY_LOG,
+-                                                     msgNode,
+-                                                     hudId,
+-                                                     null,
+-                                                     null,
+-                                                     clipboardText);
+-
 -    ConsoleUtils.outputMessageNode(messageNode, aActivityObject.hudId);
 -    return messageNode;
-+    messageNode.setAttribute("connectionId", aMessage.log.entries[0].connection);
-+
-+    messageNode._httpActivity = aMessage;
-+
-+    hud.makeOutputMessageLink(messageNode, function HS_net_message_link() {
-+      if (!messageNode._panelOpen) {
-+        this.openNetworkPanel(messageNode);
-+      }
-+    }.bind(this));
-+
-+    ConsoleUtils.outputMessageNode(messageNode, aMessage.hudId);
-   },
- 
-   /**
+-  },
+-
+-  /**
     * Creates a generator that always returns a unique number for use in the
     * indexes
     *
     * @returns Generator
     */
-@@ -2555,21 +1249,16 @@ HUD_SERVICE.prototype =
+   createSequencer: function HS_createSequencer(aInt)
+   {
+     function sequencer(aInt)
+@@ -2555,21 +1179,16 @@ HUD_SERVICE.prototype =
                       contentWindow: aContentWindow.top
                     };
  
@@ -2676,7 +2751,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          hud.reattachConsole(aContentWindow);
        }
      }
-@@ -2884,17 +1573,17 @@ HeadsUpDisplay.prototype = {
+@@ -2884,17 +1503,17 @@ HeadsUpDisplay.prototype = {
     * Web Console content script.
     *
     * @private
@@ -2695,7 +2770,109 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    groupDepth: 0,
  
-@@ -4032,16 +2721,19 @@ HeadsUpDisplay.prototype = {
+@@ -3966,16 +2585,82 @@ HeadsUpDisplay.prototype = {
+                                               aScriptError.lineNumber,
+                                               null,
+                                               null,
+                                               aScriptError.timeStamp);
+ 
+     ConsoleUtils.outputMessageNode(node, this.hudId);
+   },
+ 
++  /**
++   * Logs network activity.
++   *
++   * @param object aActivityObject
++   *        The activity to log.
++   */
++  // TODO: update the comment
++  logNetActivity: function HUD_logNetActivity(aMessage)
++  {
++    let entry = aMessage.log.entries[0];
++    let request = entry.request;
++
++    let msgNode = this.chromeDocument.createElementNS(XUL_NS, "hbox");
++
++    let methodNode = this.chromeDocument.createElementNS(XUL_NS, "label");
++    methodNode.setAttribute("value", request.method);
++    methodNode.classList.add("webconsole-msg-body-piece");
++    msgNode.appendChild(methodNode);
++
++    let linkNode = this.chromeDocument.createElementNS(XUL_NS, "hbox");
++    linkNode.setAttribute("flex", "1");
++    linkNode.classList.add("webconsole-msg-body-piece");
++    linkNode.classList.add("webconsole-msg-link");
++    msgNode.appendChild(linkNode);
++
++    let urlNode = this.chromeDocument.createElementNS(XUL_NS, "label");
++    urlNode.setAttribute("crop", "center");
++    urlNode.setAttribute("flex", "1");
++    urlNode.setAttribute("title", request.url);
++    urlNode.setAttribute("value", request.url);
++    urlNode.classList.add("hud-clickable");
++    urlNode.classList.add("webconsole-msg-body-piece");
++    urlNode.classList.add("webconsole-msg-url");
++    linkNode.appendChild(urlNode);
++
++    let statusNode = this.chromeDocument.createElementNS(XUL_NS, "label");
++    statusNode.setAttribute("value", "");
++    statusNode.classList.add("hud-clickable");
++    statusNode.classList.add("webconsole-msg-body-piece");
++    statusNode.classList.add("webconsole-msg-status");
++    linkNode.appendChild(statusNode);
++
++    let clipboardText = request.method + " " + request.url;
++
++    let messageNode = ConsoleUtils.createMessageNode(this.chromeDocument,
++                                                     CATEGORY_NETWORK,
++                                                     SEVERITY_LOG,
++                                                     msgNode,
++                                                     hudId,
++                                                     null,
++                                                     null,
++                                                     clipboardText);
++
++    messageNode.setAttribute("connectionId", entry.connection);
++
++    messageNode._httpActivity = aMessage;
++
++    hud.makeOutputMessageLink(messageNode, function HUD_net_message_link() {
++      if (!messageNode._panelOpen) {
++        HUDService.openNetworkPanel(messageNode);
++      }
++    }.bind(this));
++
++    ConsoleUtils.outputMessageNode(messageNode, aMessage.hudId);
++  },
++
+   ERRORS: {
+     HUD_BOX_DOES_NOT_EXIST: "Heads Up Display does not exist",
+     TAB_ID_REQUIRED: "Tab DOM ID is required",
+     PARENTNODE_NOT_FOUND: "parentNode element not found"
+   },
+ 
+   /**
+    * Setup the message manager used to communicate with the Web Console content
+@@ -3989,17 +2674,17 @@ HeadsUpDisplay.prototype = {
+     this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
+ 
+     this._messageListeners.forEach(function(aName) {
+       this.messageManager.addMessageListener(aName, this);
+     }, this);
+ 
+     let message = {
+       hudId: this.hudId,
+-      features: ["ConsoleAPI", "JSTerm", "PageError"],
++      features: ["ConsoleAPI", "JSTerm", "PageError", "NetworkMonitor"],
+       cachedMessages: ["ConsoleAPI", "PageError"],
+     };
+     this.sendMessageToContent("WebConsole:Init", message);
+   },
+ 
+   /**
+    * Handler for all of the messages coming from the Web Console content script.
+    *
+@@ -4032,16 +2717,19 @@ HeadsUpDisplay.prototype = {
          break;
        case "WebConsole:PageError":
          this.reportPageError(aMessage.json.pageError);
@@ -2715,7 +2892,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * now this method sends the web-console-created notification using the
     * nsIObserverService.
     *
-@@ -4108,16 +2800,69 @@ HeadsUpDisplay.prototype = {
+@@ -4108,16 +2796,68 @@ HeadsUpDisplay.prototype = {
          message: aMessage,
          callback: aCallback,
        };
@@ -2725,24 +2902,23 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    },
  
 +  // TODO: add a comment.
-+  handleNetworkActivity: function JST_handleNetworkActivity(aMessage)
++  handleNetworkActivity: function HUD_handleNetworkActivity(aMessage)
 +  {
-+    dump("JST_handleNetworkActivity stage " + aMessage.stage + "\n");
++    dump("HUD_handleNetworkActivity stage " + aMessage.stage + "\n");
 +
 +    if (aMessage.stage == "REQUEST_HEADER") {
 +      HUDService.logNetActivity(aMessage);
 +      return;
 +    }
 +
-+    let hud = HUDService.getHudReferenceById(aMessage.hudId);
 +    let entry = aMessage.log.entries[0];
 +    let request = entry.request;
 +    let response = entry.response;
 +
-+    let messageNode = hud.outputNode.
++    let messageNode = this.outputNode.
 +      querySelector("richlistitem[connectionId=" + entry.connection + "]");
 +    if (!messageNode) {
-+      dump("JST_handleNetworkActivity: unknown connection ID!\n");
++      dump("HUD_handleNetworkActivity: unknown connection ID!\n");
 +      return;
 +    }
 +    messageNode._httpActivity = aMessage;
@@ -2785,7 +2961,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @param function aCallback
     *        The function you want invoked when the user clicks on the message
     *        element.
-@@ -4168,16 +2913,17 @@ HeadsUpDisplay.prototype = {
+@@ -4168,16 +2908,17 @@ HeadsUpDisplay.prototype = {
      }
      if (this.gcliterm) {
        this.gcliterm.destroy();
@@ -2803,7 +2979,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.positionMenuitems.window.removeEventListener("command",
        this._positionConsoleWindow, false);
  
-@@ -6089,98 +4835,16 @@ CommandController.prototype = {
+@@ -6089,98 +4830,16 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
