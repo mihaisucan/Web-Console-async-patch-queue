@@ -1,18 +1,18 @@
 # HG changeset patch
-# Parent d418134729fa5d5521aed53a276ac89738ba3062
+# Parent f5d8354ebb39aecf37a14c898536eea6a5128b51
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1335470794 -10800
+# Date 1336662097 -10800
 
 Bug 673148 - (async-webconsole) Part 2 - Make script and style errors async
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -40,41 +40,35 @@
-  * the provisions above, a recipient may use your version of this file under
-  * the terms of any one of the MPL, the GPL or the LGPL.
-  *
-  * ***** END LICENSE BLOCK ***** */
+@@ -2,41 +2,35 @@
+ /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+  * You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  "use strict";
  
@@ -63,10 +63,10 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
   * The Web Console content instance manager.
   */
  let Manager = {
-   get "window"() content,
+   get window() content,
    get console() this.window.console,
    sandbox: null,
-@@ -95,24 +89,48 @@ let Manager = {
+@@ -58,24 +52,48 @@ let Manager = {
    init: function Manager_init()
    {
      this._enabledFeatures = [];
@@ -115,7 +115,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
      }
  
      switch (aMessage.name) {
-@@ -132,29 +150,47 @@ let Manager = {
+@@ -95,29 +113,47 @@ let Manager = {
          let handler = this._messageHandlers[aMessage.name];
          handler && handler(aMessage.json);
          break;
@@ -165,7 +165,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
     *          ConsoleAPI: { ... }, // ConsoleAPI-specific options
     *          cachedMessages: ["ConsoleAPI"],
     *        }
-@@ -234,16 +270,18 @@ let Manager = {
+@@ -198,16 +234,18 @@ let Manager = {
     * a set of observers/listeners that are added in the content process. This
     * content script exposes the data via the message manager for the features
     * you enable.
@@ -184,7 +184,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
     *        instance. This can be used for feature-specific options.
     */
    enableFeature: function Manager_enableFeature(aFeature, aMessage)
-@@ -254,89 +292,143 @@ let Manager = {
+@@ -218,89 +256,141 @@ let Manager = {
  
      switch (aFeature) {
        case "JSTerm":
@@ -314,8 +314,6 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    let tabContainer = xulWindow.gBrowser.tabContainer;
 +    tabContainer.removeEventListener("TabClose", this._onTabClose, false);
 +
-+    let hudId = this.hudId;
-+
      this._messageListeners.forEach(function(aName) {
        removeMessageListener(aName, this);
      }, this);
@@ -336,7 +334,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
   * Console.
   */
  let JSTerm = {
-@@ -478,17 +570,17 @@ let ConsoleAPIObserver = {
+@@ -442,17 +532,17 @@ let ConsoleAPIObserver = {
     *
     * @param object aMessage
     *        The message object receives from the observer service.
@@ -355,7 +353,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
      let msgWindow =
        WebConsoleUtils.getWindowByOuterId(apiMessage.ID, Manager.window);
      if (!msgWindow || msgWindow.top != Manager.window) {
-@@ -609,21 +701,17 @@ let ConsoleAPIObserver = {
+@@ -573,21 +663,17 @@ let ConsoleAPIObserver = {
     *         prepared to be sent to the remote Web Console instance.
     */
    getCachedMessages: function CAO_getCachedMessages()
@@ -378,7 +376,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    },
  
    /**
-@@ -640,10 +728,101 @@ let ConsoleAPIObserver = {
+@@ -604,10 +690,101 @@ let ConsoleAPIObserver = {
     */
    destroy: function CAO_destroy()
    {
@@ -2019,7 +2017,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_603750_webs
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js b/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
-@@ -2,36 +2,58 @@
+@@ -2,27 +2,49 @@
  /* Any copyright is dedicated to the Public Domain.
     http://creativecommons.org/publicdomain/zero/1.0/ */
  
@@ -2074,16 +2072,6 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js b
  
    waitForSuccess({
      name: "10 repeated console.log messages",
--    validatorFn: function _validator()
-+    validatorFn: function()
-     {
-       let node = outputNode.querySelector(".webconsole-msg-console");
-       return node && node.childNodes[3].firstChild.getAttribute("value") == 10;
-     },
-     successFn: finishTest,
-     failureFn: finishTest,
-   });
- }
 @@ -40,16 +62,16 @@ function onContentLoaded()
   * Unit test for bug 611795:
   * Repeated CSS messages get collapsed into one.
@@ -2887,7 +2875,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_extras.
  function consoleOpened(hud) {
    waitForSuccess({
      name: "two nodes displayed",
-     validatorFn: function _validator()
+     validatorFn: function()
      {
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js b/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
@@ -3189,7 +3177,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_message_node_id
  
      waitForSuccess({
        name: "console.log message shown with an ID attribute",
-       validatorFn: function _validator()
+       validatorFn: function()
        {
          let node = hud.outputNode.querySelector(".hud-msg-node");
          return node && node.getAttribute("id");

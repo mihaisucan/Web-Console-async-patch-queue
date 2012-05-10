@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 455a266e66182fbdb69d4da5b96a760f6e320ca5
+# Parent 1c09f1d7542c0761d5d46664f95865c6934ad0ee
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1335470452 -10800
+# Date 1336655710 -10800
 
 Bug 673148 - (async-webconsole) Part 1 - Make console API async
 
@@ -25,50 +25,12 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -0,0 +1,649 @@
+@@ -0,0 +1,613 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
-+/* ***** BEGIN LICENSE BLOCK *****
-+ * Version: MPL 1.1/GPL 2.0/LGPL 2.1
-+ *
-+ * The contents of this file are subject to the Mozilla Public License Version
-+ * 1.1 (the "License"); you may not use this file except in compliance with
-+ * the License. You may obtain a copy of the License at
-+ * http://www.mozilla.org/MPL/
-+ *
-+ * Software distributed under the License is distributed on an "AS IS" basis,
-+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-+ * for the specific language governing rights and limitations under the
-+ * License.
-+ *
-+ * The Original Code is Web Console.
-+ *
-+ * The Initial Developer of the Original Code is
-+ * The Mozilla Foundation
-+ * Portions created by the Initial Developer are Copyright (C) 2011
-+ * the Initial Developer. All Rights Reserved.
-+ *
-+ * Contributor(s):
-+ *   Mihai Sucan <mihai.sucan@gmail.com> (original author)
-+ *   David Dahl <ddahl@mozilla.com>
-+ *   Rob Campbell <rcampbell@mozilla.com>
-+ *   Johnathan Nightingale <jnightingale@mozilla.com>
-+ *   Patrick Walton <pcwalton@mozilla.com>
-+ *   Julian Viereck <jviereck@mozilla.com>
-+ *
-+ * Alternatively, the contents of this file may be used under the terms of
-+ * either the GNU General Public License Version 2 or later (the "GPL"), or
-+ * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-+ * in which case the provisions of the GPL or the LGPL are applicable instead
-+ * of those above. If you wish to allow use of your version of this file only
-+ * under the terms of either the GPL or the LGPL, and not to allow others to
-+ * use your version of this file under the terms of the MPL, indicate your
-+ * decision by deleting the provisions above and replace them with the notice
-+ * and other provisions required by the GPL or the LGPL. If you do not delete
-+ * the provisions above, a recipient may use your version of this file under
-+ * the terms of any one of the MPL, the GPL or the LGPL.
-+ *
-+ * ***** END LICENSE BLOCK ***** */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
++ * You can obtain one at http://mozilla.org/MPL/2.0/. */
 +
 +"use strict";
 +
@@ -103,12 +65,13 @@ new file mode 100644
 + * The Web Console content instance manager.
 + */
 +let Manager = {
-+  get "window"() content,
++  get window() content,
 +  get console() this.window.console,
 +  sandbox: null,
 +  hudId: null,
 +  _sequence: 0,
-+  _messageListeners: ["WebConsole:Init", "WebConsole:Destroy"],
++  _messageListeners: ["WebConsole:Init", "WebConsole:EnableFeature",
++                      "WebConsole:DisableFeature", "WebConsole:Destroy"],
 +  _messageHandlers: null,
 +  _enabledFeatures: null,
 +
@@ -216,6 +179,7 @@ new file mode 100644
 +  addMessageHandler: function Manager_addMessageHandler(aName, aCallback)
 +  {
 +    if (aName in this._messageHandlers) {
++      Cu.reportError("Web Console content script: addMessageHandler() called for an existing message handler: " + aName);
 +      return;
 +    }
 +
@@ -1428,7 +1392,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    // A cache for tracking repeated CSS Nodes.
    this.cssNodes = {};
 +
-+  this.setupMessageManager();
++  this._setupMessageManager();
  }
  
  HeadsUpDisplay.prototype = {
@@ -1935,7 +1899,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +   *
 +   * @private
 +   */
-+  setupMessageManager: function HUD_setupMessageManager()
++  _setupMessageManager: function HUD__setupMessageManager()
 +  {
 +    this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
 +
@@ -2673,7 +2637,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -        hud.pruneConsoleDirNode(node.firstChild);
 +    let outputNode = hud.outputNode;
 +    let node;
-+    while (node = outputNode.firstChild) {
++    while ((node = outputNode.firstChild)) {
 +      if (node._evalCacheId && !node._panelOpen) {
 +        this.clearObjectCache(node._evalCacheId);
 +      }
@@ -3083,47 +3047,12 @@ diff --git a/browser/devtools/webconsole/PropertyPanelAsync.jsm b/browser/devtoo
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/PropertyPanelAsync.jsm
-@@ -0,0 +1,501 @@
+@@ -0,0 +1,466 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
-+/* ***** BEGIN LICENSE BLOCK *****
-+ * Version: MPL 1.1/GPL 2.0/LGPL 2.1
-+ *
-+ * The contents of this file are subject to the Mozilla Public License Version
-+ * 1.1 (the "License"); you may not use this file except in compliance with
-+ * the License. You may obtain a copy of the License at
-+ * http://www.mozilla.org/MPL/
-+ *
-+ * Software distributed under the License is distributed on an "AS IS" basis,
-+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-+ * for the specific language governing rights and limitations under the
-+ * License.
-+ *
-+ * The Original Code is DevTools Web Console Property Panel.
-+ *
-+ * The Initial Developer of the Original Code is
-+ * the Mozilla Foundation.
-+ * Portions created by the Initial Developer are Copyright (C) 2010
-+ * the Initial Developer. All Rights Reserved.
-+ *
-+ * Contributor(s):
-+ *   Rob Campbell <rcampbell@mozilla.com>
-+ *   Julian Viereck <jviereck@mozilla.com>
-+ *   Mihai Sucan <mihai.sucan@gmail.com>
-+ *
-+ * Alternatively, the contents of this file may be used under the terms of
-+ * either the GNU General Public License Version 2 or later (the "GPL"), or
-+ * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-+ * in which case the provisions of the GPL or the LGPL are applicable instead
-+ * of those above. If you wish to allow use of your version of this file only
-+ * under the terms of either the GPL or the LGPL, and not to allow others to
-+ * use your version of this file under the terms of the MPL, indicate your
-+ * decision by deleting the provisions above and replace them with the notice
-+ * and other provisions required by the GPL or the LGPL. If you do not delete
-+ * the provisions above, a recipient may use your version of this file under
-+ * the terms of any one of the MPL, the GPL or the LGPL.
-+ *
-+ * ***** END LICENSE BLOCK ***** */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
++ * You can obtain one at http://mozilla.org/MPL/2.0/. */
 +
 +"use strict";
 +
@@ -3589,50 +3518,12 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
-@@ -0,0 +1,744 @@
+@@ -0,0 +1,706 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
-+/* ***** BEGIN LICENSE BLOCK *****
-+ * Version: MPL 1.1/GPL 2.0/LGPL 2.1
-+ *
-+ * The contents of this file are subject to the Mozilla Public License Version
-+ * 1.1 (the "License"); you may not use this file except in compliance with
-+ * the License. You may obtain a copy of the License at
-+ * http://www.mozilla.org/MPL/
-+ *
-+ * Software distributed under the License is distributed on an "AS IS" basis,
-+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-+ * for the specific language governing rights and limitations under the
-+ * License.
-+ *
-+ * The Original Code is Web Console.
-+ *
-+ * The Initial Developer of the Original Code is
-+ * The Mozilla Foundation
-+ * Portions created by the Initial Developer are Copyright (C) 2011
-+ * the Initial Developer. All Rights Reserved.
-+ *
-+ * Contributor(s):
-+ *   Mihai Sucan <mihai.sucan@gmail.com>
-+ *   David Dahl <ddahl@mozilla.com>
-+ *   Rob Campbell <rcampbell@mozilla.com>
-+ *   Johnathan Nightingale <jnightingale@mozilla.com>
-+ *   Patrick Walton <pcwalton@mozilla.com>
-+ *   Julian Viereck <jviereck@mozilla.com>
-+ *
-+ * Alternatively, the contents of this file may be used under the terms of
-+ * either the GNU General Public License Version 2 or later (the "GPL"), or
-+ * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-+ * in which case the provisions of the GPL or the LGPL are applicable instead
-+ * of those above. If you wish to allow use of your version of this file only
-+ * under the terms of either the GPL or the LGPL, and not to allow others to
-+ * use your version of this file under the terms of the MPL, indicate your
-+ * decision by deleting the provisions above and replace them with the notice
-+ * and other provisions required by the GPL or the LGPL. If you do not delete
-+ * the provisions above, a recipient may use your version of this file under
-+ * the terms of any one of the MPL, the GPL or the LGPL.
-+ *
-+ * ***** END LICENSE BLOCK ***** */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
++ * You can obtain one at http://mozilla.org/MPL/2.0/. */
 +
 +"use strict";
 +
@@ -4694,7 +4585,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_outp
 +    {
 +      return outputNode.textContent.indexOf("bug587617") > -1;
 +    },
-+    successFn: function _success()
++    successFn: function()
 +    {
 +      outputNode.selectedIndex = 0;
 +      outputNode.focus();
@@ -4888,7 +4779,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
 -    querySelector(".hud-log:last-child");
 +  waitForSuccess({
 +    name: "console.log message for test #" + cpos,
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      return HUD.outputNode.querySelector(".hud-log");
 +    },
@@ -5102,7 +4993,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js b
 -  finishTest();
 +  waitForSuccess({
 +    name: "10 repeated console.log messages",
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      let node = outputNode.querySelector(".webconsole-msg-console");
 +      return node && node.childNodes[3].firstChild.getAttribute("value") == 10;
@@ -5188,7 +5079,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_main
  
 +  waitForSuccess({
 +    name: "150 console.log messages displayed",
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      return outputNode.querySelectorAll(".hud-log").length == 150;
 +    },
@@ -5218,7 +5109,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_main
 -    is(scrollBox.scrollTop, topPosition, "scroll location is still at the top");
 +  waitForSuccess({
 +    name: "console.log message no. 151 displayed",
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      return outputNode.querySelectorAll(".hud-log").length == 151;
 +    },
@@ -5250,7 +5141,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_main
 +
 +  waitForSuccess({
 +    name: "console.log message no. 152 displayed",
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      return outputNode.querySelectorAll(".hud-log").length == 152;
 +    },
@@ -5320,7 +5211,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prun
  
 +  waitForSuccess({
 +    name: "150 console.log messages displayed",
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      return outputNode.querySelectorAll(".hud-log").length == 140;
 +    },
@@ -5349,7 +5240,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prun
  
 +  waitForSuccess({
 +    name: "console.log message #151 displayed",
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      return outputNode.textContent.indexOf("hello world") > -1;
 +    },
@@ -5994,7 +5885,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_664131_cons
 +
 +  waitForSuccess({
 +    name: "console.groupCollapsed displayed",
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      return outputNode.textContent.indexOf("bug664131b") > -1;
 +    },
@@ -6041,7 +5932,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_664131_cons
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_chrome.js b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_chrome.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
-@@ -64,11 +64,11 @@ function testChrome() {
+@@ -62,11 +62,11 @@ function testChrome() {
    ok(hud.outputNode, "we have an output node");
  
    // Test typing 'docu'.
@@ -6081,11 +5972,11 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_extras.
 +function consoleOpened(hud) {
 +  waitForSuccess({
 +    name: "two nodes displayed",
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      return hud.outputNode.querySelectorAll(".hud-msg-node").length == 2;
 +    },
-+    successFn: function _success()
++    successFn: function()
 +    {
 +      let nodes = hud.outputNode.querySelectorAll(".hud-msg-node");
 +      ok(/start/.test(nodes[0].textContent), "start found");
@@ -6197,7 +6088,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_logging
 -  is(nodes.length, 1, "1 hidden " + aMethod  + " node found (via classList)");
 +  waitForSuccess({
 +    name: "1 hidden " + aMethod + " node via string filtering",
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      return outputNode.querySelectorAll(".hud-filtered-by-string").length == 1;
 +    },
@@ -6220,7 +6111,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_logging
 -  is(nodes.length, 1,  aMethod + " logging turned off, 1 message hidden");
 +  waitForSuccess({
 +    name: "1 message hidden for " + aMethod + " (logging turned off)",
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      return outputNode.querySelectorAll("description").length == 1;
 +    },
@@ -6238,7 +6129,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_logging
 -  is(nodes.length, 1, aMethod + " logging turned on, 1 message shown");
 +  waitForSuccess({
 +    name: "1 message shown for " + aMethod + " (logging turned on)",
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      return outputNode.querySelectorAll("description").length == 1;
 +    },
@@ -6259,7 +6150,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_logging
 -    "Emitted both console arguments");
 +  waitForSuccess({
 +    name: "show both console arguments for " + aMethod,
-+    validatorFn: function _validator()
++    validatorFn: function()
 +    {
 +      let node = outputNode.querySelector(".hud-msg-node");
 +      return node && /foo bar/.test(node.textContent);
@@ -6558,7 +6449,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_message_node_id
 -  finishTest();
 +    waitForSuccess({
 +      name: "console.log message shown with an ID attribute",
-+      validatorFn: function _validator()
++      validatorFn: function()
 +      {
 +        let node = hud.outputNode.querySelector(".hud-msg-node");
 +        return node && node.getAttribute("id");

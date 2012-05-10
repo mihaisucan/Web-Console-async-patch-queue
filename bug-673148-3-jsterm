@@ -1,14 +1,58 @@
 # HG changeset patch
-# Parent ffa6e0a7128f16471671d4d3c5e41b7183251bf9
+# Parent 98bc452ba95a749ac4eb7d3c54ac5f0527ea787e
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1336590170 -10800
+# Date 1336666442 -10800
 
-Bug 673148 - (async-webconsole) Part 3 - Make JS evaluation and object inspection async
+Bug 673148 - (async-webconsole) Part 3 - Make JS evaluation and object inspection async; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
 
-diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService-content.js
---- a/browser/devtools/webconsole/HUDService-content.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/HUDService-content.js	Wed May 09 22:02:52 2012 +0300
-@@ -61,6 +61,7 @@
+diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratchpad/scratchpad.js
+--- a/browser/devtools/scratchpad/scratchpad.js
++++ b/browser/devtools/scratchpad/scratchpad.js
+@@ -519,30 +519,31 @@ var Scratchpad = {
+     // button to the panel so that the evalString can be reexecuted to update
+     // the content of the panel.
+     if (aEvalString !== null) {
+       buttons.push({
+         label: this.strings.
+                GetStringFromName("propertyPanel.updateButton.label"),
+         accesskey: this.strings.
+                    GetStringFromName("propertyPanel.updateButton.accesskey"),
+-        oncommand: function () {
++        oncommand: function _SP_PP_Update_onCommand() {
+           let [error, result] = self.evalForContext(aEvalString);
+ 
+           if (!error) {
+-            propPanel.treeView.data = result;
++            propPanel.treeView.data = { object: result };
+           }
+         }
+       });
+     }
+ 
+     let doc = this.browserWindow.document;
+     let parent = doc.getElementById("mainPopupSet");
+-    let title = aOutputObject.toString();
+-    propPanel = new PropertyPanel(parent, doc, title, aOutputObject, buttons);
++    let title = String(aOutputObject);
++    propPanel = new PropertyPanel(parent, title, { object: aOutputObject },
++                                  buttons);
+ 
+     let panel = propPanel.panel;
+     panel.setAttribute("class", "scratchpad_propertyPanel");
+     panel.openPopup(null, "after_pointer", 0, 0, false, false);
+     panel.sizeTo(200, 400);
+ 
+     return propPanel;
+   },
+diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
+--- a/browser/devtools/webconsole/HUDService-content.js
++++ b/browser/devtools/webconsole/HUDService-content.js
+@@ -18,26 +18,26 @@ Cu.import("resource://gre/modules/Servic
+ Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm", tempScope);
+ Cu.import("resource:///modules/WebConsoleUtils.jsm", tempScope);
+ 
+ let XPCOMUtils = tempScope.XPCOMUtils;
+ let Services = tempScope.Services;
  let gConsoleStorage = tempScope.ConsoleAPIStorage;
  let WebConsoleUtils = tempScope.WebConsoleUtils;
  let l10n = WebConsoleUtils.l10n;
@@ -16,15 +60,27 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService-content.js
  tempScope = null;
  
  let _alive = true; // Track if this content script should still be alive.
-@@ -70,7 +71,6 @@
+ 
+ /**
+  * The Web Console content instance manager.
   */
  let Manager = {
-   get "window"() content,
+   get window() content,
 -  get console() this.window.console,
    sandbox: null,
    hudId: null,
    _sequence: 0,
-@@ -97,11 +97,7 @@
+   _messageListeners: ["WebConsole:Init", "WebConsole:EnableFeature",
+                       "WebConsole:DisableFeature", "WebConsole:Destroy"],
+   _messageHandlers: null,
+   _enabledFeatures: null,
+ 
+@@ -55,21 +55,17 @@ let Manager = {
+     this._messageHandlers = {};
+ 
+     this._messageListeners.forEach(function(aName) {
+       addMessageListener(aName, this);
+     }, this);
  
      // Need to track the owner XUL window to listen to the unload and TabClose
      // events, to avoid memory leaks.
@@ -37,7 +93,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService-content.js
      xulWindow.addEventListener("unload", this._onXULWindowClose, false);
  
      let tabContainer = xulWindow.gBrowser.tabContainer;
-@@ -394,6 +390,19 @@
+     tabContainer.addEventListener("TabClose", this._onTabClose, false);
+ 
+     // Need to track private browsing change and quit application notifications,
+     // again to avoid memory leaks. The Web Console main process cannot notify
+     // this content script when the XUL window close, tab close, private
+@@ -353,29 +349,38 @@ let Manager = {
+   {
+     let tab = aEvent.target;
+     if (_alive && tab.linkedBrowser.contentWindow === Manager.window) {
+       Manager.destroy();
+     }
    },
  
    /**
@@ -57,7 +123,8 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService-content.js
     * Destroy the Web Console content script instance.
     */
    destroy: function Manager_destroy()
-@@ -402,11 +411,7 @@
+   {
+     Services.obs.removeObserver(this, "private-browsing-change-granted");
      Services.obs.removeObserver(this, "quit-application-granted");
  
      _alive = false;
@@ -70,7 +137,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService-content.js
      xulWindow.removeEventListener("unload", this._onXULWindowClose, false);
      let tabContainer = xulWindow.gBrowser.tabContainer;
      tabContainer.removeEventListener("TabClose", this._onTabClose, false);
-@@ -428,10 +433,237 @@
+ 
+     this._messageListeners.forEach(function(aName) {
+       removeMessageListener(aName, this);
+     }, this);
+ 
+@@ -385,42 +390,365 @@ let Manager = {
+     this._messageHandlers = null;
+     Manager = ConsoleAPIObserver = JSTerm = ConsoleListener = null;
+     Cc = Ci = Cu = XPCOMUtils = Services = gConsoleStorage =
+       WebConsoleUtils = l10n = null;
+   },
  };
  
  /**
@@ -308,7 +385,12 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService-content.js
    /**
     * Evaluation result objects are cached in this object. The chrome process can
     * request any object based on its ID.
-@@ -444,16 +676,112 @@
+    */
+   _objectCache: null,
+ 
+   /**
+    * Initialize the JavaScript terminal feature.
+    */
    init: function JST_init()
    {
      this._objectCache = {};
@@ -425,7 +507,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService-content.js
     *
     * @param object aRequest
     *        The message that requests the content object. Properties: cacheId,
-@@ -519,8 +847,7 @@
+    *        objectId and resultCacheId.
+    *
+    *        Evaluated objects are stored in "buckets" (cache IDs). Each object
+    *        is assigned an ID (object ID). You can request a specific object
+    *        (objectId) from a specific cache (cacheId) and tell where the result
+@@ -476,37 +804,125 @@ let JSTerm = {
+    *        given object may include references to other objects - those
+    *        references will be stored in the given cache ID so the remote
+    *        process can later retrieve them as well.
+    * @return array
+    *         An array that holds one element for each enumerable property and
     *         method in aObject. Each element describes the property. For details
     *         see WebConsoleUtils.namesAndValuesOf().
     */
@@ -435,7 +527,12 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService-content.js
    {
      // Cache the properties that have inspectable values.
      let propCache = this._objectCache[aCacheId] || {};
-@@ -533,13 +860,102 @@
+     let result = WebConsoleUtils.namesAndValuesOf(aObject, propCache);
+     if (!(aCacheId in this._objectCache) && Object.keys(propCache).length > 0) {
+       this._objectCache[aCacheId] = propCache;
+     }
+ 
+     return result;
    },
  
    /**
@@ -540,10 +637,20 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService-content.js
      delete this._objectCache;
    },
  };
-diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
---- a/browser/devtools/webconsole/HUDService.jsm	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/HUDService.jsm	Wed May 09 22:02:52 2012 +0300
-@@ -57,10 +57,6 @@
+ 
+ /**
+  * The window.console API observer. This allows the window.console API messages
+  * to be sent to the remote Web Console instance.
+  */
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -52,20 +52,16 @@ const Cu = Components.utils;
+ const CONSOLEAPI_CLASS_ID = "{b49c18f8-3379-4fc0-8c90-d7772c1a9ff3}";
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource:///modules/NetworkHelper.jsm");
  
  var EXPORTED_SYMBOLS = ["HUDService", "ConsoleUtils"];
  
@@ -554,7 +661,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
  XPCOMUtils.defineLazyServiceGetter(this, "activityDistributor",
                                     "@mozilla.org/network/http-activity-distributor;1",
                                     "nsIHttpActivityDistributor");
-@@ -98,24 +94,14 @@
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "mimeService",
+                                    "@mozilla.org/mime;1",
+                                    "nsIMIMEService");
+ 
+@@ -93,34 +89,24 @@ XPCOMUtils.defineLazyGetter(this, "NetUt
+ 
+ XPCOMUtils.defineLazyGetter(this, "template", function () {
+   var obj = {};
+   Cu.import("resource:///modules/devtools/Templater.jsm", obj);
+   return obj.template;
  });
  
  XPCOMUtils.defineLazyGetter(this, "PropertyPanel", function () {
@@ -583,7 +700,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    return obj.PropertyTreeView;
  });
  
-@@ -141,12 +127,6 @@
+ XPCOMUtils.defineLazyGetter(this, "AutocompletePopup", function () {
+   var obj = {};
+   try {
+     Cu.import("resource:///modules/AutocompletePopup.jsm", obj);
+   }
+@@ -136,22 +122,16 @@ XPCOMUtils.defineLazyGetter(this, "Scrat
+     Cu.import("resource:///modules/devtools/scratchpad-manager.jsm", obj);
+   }
+   catch (err) {
+     Cu.reportError(err);
+   }
    return obj.ScratchpadManager;
  });
  
@@ -596,7 +723,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
  XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function () {
    let obj = {};
    Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
-@@ -1783,9 +1763,6 @@
+   return obj.WebConsoleUtils;
+ });
+ 
+ XPCOMUtils.defineLazyGetter(this, "l10n", function() {
+   return WebConsoleUtils.l10n;
+@@ -1778,19 +1758,16 @@ HUD_SERVICE.prototype =
+    */
+   unregisterDisplay: function HS_unregisterDisplay(aHUDId)
+   {
+     let hud = this.getHudReferenceById(aHUDId);
+ 
      // Remove children from the output. If the output is not cleared, there can
      // be leaks as some nodes has node.onclick = function; set and GC can't
      // remove the nodes then.
@@ -606,7 +743,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
      if (hud.gcliterm) {
        hud.gcliterm.clearOutput();
      }
-@@ -1810,10 +1787,6 @@
+ 
+     hud.destroy();
+ 
+     // Make sure that the console panel does not try to call
+     // deactivateHUDForContext() again.
+@@ -1805,20 +1782,16 @@ HUD_SERVICE.prototype =
+     }
+ 
+     hud.HUDBox.parentNode.removeChild(hud.HUDBox);
+ 
+     if (hud.splitter.parentNode) {
        hud.splitter.parentNode.removeChild(hud.splitter);
      }
  
@@ -617,7 +764,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
      delete this.hudReferences[aHUDId];
  
      for (let windowID in this.windowIds) {
-@@ -1856,7 +1829,7 @@
+       if (this.windowIds[windowID] == aHUDId) {
+         delete this.windowIds[windowID];
+       }
+     }
+ 
+@@ -1851,17 +1824,17 @@ HUD_SERVICE.prototype =
+   {
+     if (Object.keys(this.hudReferences).length > 0) {
+       return;
+     }
+ 
      // begin observing HTTP traffic
      this.startHTTPObservation();
  
@@ -626,7 +783,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    },
  
    /**
-@@ -1880,7 +1853,7 @@
+    * Suspend Web Console activity. This is called when all Web Consoles are
+    * closed.
+    *
+    * @returns void
+    */
+@@ -1875,17 +1848,17 @@ HUD_SERVICE.prototype =
+ 
+     this.openRequests = {};
+     this.openResponseHeaders = {};
+ 
+     delete this.defaultFilterPrefs;
  
      delete this.lastFinishedRequestCallback;
  
@@ -635,7 +802,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    },
  
    /**
-@@ -2448,29 +2421,6 @@
+    * Shutdown all HeadsUpDisplays on xpcom-shutdown
+    *
+    * @returns void
+    */
+   shutdown: function HS_shutdown()
+@@ -2443,39 +2416,16 @@ HUD_SERVICE.prototype =
+                                                      null,
+                                                      clipboardText);
+ 
+     ConsoleUtils.outputMessageNode(messageNode, aActivityObject.hudId);
+     return messageNode;
    },
  
    /**
@@ -665,7 +842,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
     * Creates a generator that always returns a unique number for use in the
     * indexes
     *
-@@ -2488,31 +2438,6 @@
+    * @returns Generator
+    */
+   createSequencer: function HS_createSequencer(aInt)
+   {
+     function sequencer(aInt)
+@@ -2483,41 +2433,16 @@ HUD_SERVICE.prototype =
+       while(1) {
+         aInt++;
+         yield aInt;
+       }
+     }
      return sequencer(aInt);
    },
  
@@ -697,30 +884,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    /**
     * onTabClose event handler function
     *
-@@ -2934,17 +2859,12 @@
- 
-   this.HUDBox.lastTimestamp = 0;
-   // create the JSTerm input element
--  try {
--    this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
--    if (this.jsterm) {
--      this.jsterm.inputNode.focus();
--    }
--    if (this.gcliterm) {
--      this.gcliterm.inputNode.focus();
--    }
-+  this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
-+  if (this.jsterm) {
-+    this.jsterm.inputNode.focus();
-   }
--  catch (ex) {
--    Cu.reportError(ex);
-+  if (this.gcliterm) {
-+    this.gcliterm.inputNode.focus();
-   }
- 
-   // A cache for tracking repeated CSS Nodes.
-@@ -2962,7 +2882,9 @@
+    * @param aEvent
+    * @returns void
+    */
+   onTabClose: function HS_onTabClose(aEvent)
+   {
+@@ -2957,17 +2882,19 @@ HeadsUpDisplay.prototype = {
+   /**
+    * Message names that the HUD listens for. These messages come from the remote
+    * Web Console content script.
+    *
+    * @private
     * @type array
     */
    _messageListeners: ["JSTerm:EvalObject", "WebConsole:ConsoleAPI",
@@ -731,7 +905,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
  
    consolePanel: null,
  
-@@ -3286,10 +3208,8 @@
+   /**
+    * The nesting depth of the currently active console group.
+    */
+   groupDepth: 0,
+ 
+@@ -3281,20 +3208,18 @@ HeadsUpDisplay.prototype = {
+     let usegcli = false;
+     try {
+       // usegcli = Services.prefs.getBoolPref("devtools.gcli.enable");
+     }
+     catch (ex) {}
  
      if (appName() == "FIREFOX") {
        if (!usegcli) {
@@ -744,7 +928,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
        }
        else {
          this.gcliterm = new GcliTerm(aWindow, this.hudId, this.chromeDocument,
-@@ -3361,15 +3281,10 @@
+                                      this.console, this.hintNode, this.consoleWrap);
+         aParentNode.appendChild(this.gcliterm.element);
+       }
+     }
+     else {
+@@ -3356,25 +3281,20 @@ HeadsUpDisplay.prototype = {
+     this.contentWindow = aContentWindow;
+     this.contentDocument = this.contentWindow.document;
+     this.uriSpec = this.contentWindow.location.href;
+ 
+     if (this.consolePanel) {
        this.consolePanel.label = this.getPanelTitle();
      }
  
@@ -762,7 +956,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
        this.createConsoleInput(this.contentWindow, this.consoleWrap, this.outputNode);
      }
    },
-@@ -3973,7 +3888,7 @@
+ 
+   /**
+    * Shortcut to make XUL nodes
+    *
+    * @param string aTag
+@@ -3968,17 +3888,17 @@ HeadsUpDisplay.prototype = {
+           return;
+         }
+ 
+         let options = {
+           anchor: node,
            data: { object: node._stacktrace },
          };
  
@@ -771,7 +975,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
          propPanel.panel.setAttribute("hudId", this.hudId);
        }.bind(this));
      }
-@@ -4096,9 +4011,17 @@
+ 
+     ConsoleUtils.outputMessageNode(node, this.hudId);
+ 
+     if (level == "dir") {
+       // Initialize the inspector message node, by setting the PropertyTreeView
+@@ -4091,19 +4011,27 @@ HeadsUpDisplay.prototype = {
+   {
+     if (!aMessage.json || aMessage.json.hudId != this.hudId) {
+       Cu.reportError("JSTerm: received message " + aMessage.name +
+                      " from wrong hudId.");
+       return;
      }
  
      switch (aMessage.name) {
@@ -789,7 +1003,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
        case "WebConsole:ConsoleAPI":
          this.logConsoleAPIMessage(aMessage.json);
          break;
-@@ -4229,7 +4152,7 @@
+       case "WebConsole:PageError":
+         this.reportPageError(aMessage.json.pageError);
+         break;
+       case "WebConsole:CachedMessages":
+         this._displayCachedConsoleMessages(aMessage.json.messages);
+@@ -4224,17 +4152,17 @@ HeadsUpDisplay.prototype = {
+   },
+ 
+   /**
+    * Destroy the HUD object. Call this method to avoid memory leaks when the Web
+    * Console is closed.
     */
    destroy: function HUD_destroy()
    {
@@ -798,7 +1022,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
  
      this._messageListeners.forEach(function(aName) {
        this.messageManager.removeMessageListener(aName, this);
-@@ -4286,488 +4209,6 @@
+     }, this);
+ 
+     if (this.jsterm) {
+       this.jsterm.destroy();
+     }
+@@ -4281,559 +4209,63 @@ function NodeFactory(aFactoryType, ignor
+       return aDocument.createElement(aTag);
+     }
+   }
+   else {
+     throw new Error('NodeFactory: Unknown factory type: ' + aFactoryType);
    }
  }
  
@@ -1287,7 +1521,12 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
  
  /**
   * JSTerm
-@@ -4780,38 +4221,28 @@
+  *
+  * JavaScript Terminal: creates input nodes for console code interpretation
+  * and 'JS Workspaces'
+  */
+ 
+ /**
   * Create a JSTerminal or attach a JSTerm input node to an existing output node,
   * given by the parent node.
   *
@@ -1338,7 +1577,7 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    this.autocompletePopup.onSelect = this.onAutocompleteSelect.bind(this);
    this.autocompletePopup.onClick = this.acceptProposedCompletion.bind(this);
    this.init();
-@@ -4819,16 +4250,12 @@
+ }
  
  JSTerm.prototype = {
    lastInputValue: "",
@@ -1355,7 +1594,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
      this.inputNode = this.mixins.inputNode;
      this.outputNode = this.mixins.outputNode;
      this.completeNode = this.mixins.completeNode;
-@@ -4859,62 +4286,80 @@
+ 
+     this._keyPress = this.keyPress.bind(this);
+     this._inputEventHandler = this.inputEventHandler.bind(this);
+ 
+     this.inputNode.addEventListener("keypress",
+@@ -4854,203 +4286,136 @@ JSTerm.prototype = {
+     this.mixins.generateUI();
+   },
+ 
+   attachUI: function JST_attachUI()
+   {
      this.mixins.attachUI();
    },
  
@@ -1489,7 +1738,9 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    execute: function JST_execute(aExecuteString)
    {
      // attempt to execute the content of the inputNode
-@@ -4924,29 +4369,12 @@
+     aExecuteString = aExecuteString || this.inputNode.value;
+     if (!aExecuteString) {
+       this.writeOutput("no value to execute", CATEGORY_OUTPUT, SEVERITY_LOG);
        return;
      }
  
@@ -1525,7 +1776,9 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
  
      this.history.push(aExecuteString);
      this.historyIndex++;
-@@ -4956,70 +4384,6 @@
+     this.historyPlaceHolder = this.history.length;
+     this.setInputValue("");
+     this.clearCompletion();
    },
  
    /**
@@ -1596,7 +1849,16 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
     * Opens a new property panel that allows the inspection of the given object.
     * The object information can be retrieved both async and sync, depending on
     * the given options.
-@@ -5036,16 +4400,12 @@
+    *
+    * @param object aOptions
+    *        Property panel options:
+    *        - title:
+    *        Panel title.
+    *        - anchor:
+    *        The DOM element you want the panel to be anchored to.
+    *        - updateButtonCallback:
+    *        An optional function you want invoked when the user clicks the
+    *        Update button. If this function is not provided the Update button is
     *        not shown.
     *        - data:
     *        An object that represents the object you want to inspect. Please see
@@ -1618,7 +1880,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    {
      // The property panel has one button:
      //    `Update`: reexecutes the string executed on the command line. The
-@@ -5065,7 +4425,7 @@
+     //    result will be inspected by this panel.
+     let buttons = [];
+ 
+     if (aOptions.updateButtonCallback) {
+       buttons.push({
+@@ -5060,100 +4425,93 @@ JSTerm.prototype = {
+       });
+     }
+ 
+     let parent = this.document.getElementById("mainPopupSet");
+     let title = aOptions.title ?
                  l10n.getFormatStr("jsPropertyInspectTitle", [aOptions.title]) :
                  l10n.getStr("jsPropertyTitle");
  
@@ -1627,7 +1899,16 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
  
      propPanel.panel.openPopup(aOptions.anchor, "after_pointer", 0, 0, false, false);
      propPanel.panel.sizeTo(350, 450);
-@@ -5082,52 +4442,32 @@
+ 
+     if (aOptions.anchor) {
+       propPanel.panel.addEventListener("popuphiding", function onPopupHide() {
+         propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
+         aOptions.anchor._panelOpen = false;
+       }, false);
+       aOptions.anchor._panelOpen = true;
+     }
+ 
+     return propPanel;
    },
  
    /**
@@ -1704,7 +1985,12 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    },
  
    /**
-@@ -5140,15 +4480,28 @@
+    * Writes a message to the HUD that originates from the interactive
+    * JavaScript console.
+    *
+    * @param string aOutputMessage
+    *        The message to display.
+    * @param number aCategory
     *        The category of message: one of the CATEGORY_ constants.
     * @param number aSeverity
     *        The severity of message: one of the SEVERITY_ constants.
@@ -1741,7 +2027,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    },
  
    /**
-@@ -5439,7 +4792,7 @@
+    * Clear the Web Console output.
+    *
+    * @param boolean aClearStorage
+    *        True if you want to clear the console messages storage associated to
+    *        this Web Console.
+@@ -5434,17 +4792,17 @@ JSTerm.prototype = {
+   // Stores the data for the last completion.
+   lastCompletion: null,
+ 
+   /**
+    * Completes the current typed text in the inputNode. Completion is performed
     * only if the selection/cursor is at the end of the string. If no completion
     * is found, the current inputNode value and cursor/selection stay.
     *
@@ -1750,7 +2046,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
     *    - this.COMPLETE_FORWARD: If there is more than one possible completion
     *          and the input value stayed the same compared to the last time this
     *          function was called, then the next completion of all possible
-@@ -5457,11 +4810,13 @@
+    *          completions is used. If the value changed, then the first possible
+    *          completion is used and the selection is set from the current
+    *          cursor position to the end of the completed text.
+    *          If there is only one possible completion, then this completion
+    *          value is used and the cursor is put at the end of the completion.
+@@ -5452,103 +4810,178 @@ JSTerm.prototype = {
+    *          value stayed the same as the last time the function was called,
+    *          then the previous completion of all possible completions is used.
+    *    - this.COMPLETE_HINT_ONLY: If there is more than one possible
+    *          completion and the input value stayed the same compared to the
+    *          last time this function was called, then the same completion is
     *          used again. If there is only one possible completion, then
     *          the inputNode.value is set to this value and the selection is set
     *          from the current cursor position to the end of the completed text.
@@ -1766,7 +2072,16 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    {
      let inputNode = this.inputNode;
      let inputValue = inputNode.value;
-@@ -5478,55 +4833,128 @@
+     // If the inputNode has no value, then don't try to complete on it.
+     if (!inputValue) {
+       this.clearCompletion();
+       return false;
+     }
+ 
+     // Only complete if the selection is empty and at the end of the input.
+     if (inputNode.selectionStart == inputNode.selectionEnd &&
+         inputNode.selectionEnd != inputValue.length) {
+       this.clearCompletion();
        return false;
      }
  
@@ -1932,7 +2247,16 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
        let suffix = currentItem.label.substring(this.lastCompletion.
                                                 matchProp.length);
        this.updateCompleteNode(suffix);
-@@ -5543,7 +4971,7 @@
+     }
+     else {
+       this.updateCompleteNode("");
+     }
+   },
+ 
+   /**
+    * Clear the current completion information and close the autocomplete popup,
+    * if needed.
+    */
    clearCompletion: function JSTF_clearCompletion()
    {
      this.autocompletePopup.clearItems();
@@ -1941,7 +2265,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
      this.updateCompleteNode("");
      if (this.autocompletePopup.isOpen) {
        this.autocompletePopup.hidePopup();
-@@ -5562,7 +4990,7 @@
+     }
+   },
+ 
+   /**
+    * Accept the proposed input completion.
+@@ -5557,17 +4990,17 @@ JSTerm.prototype = {
+    *         True if there was a selected completion item and the input value
+    *         was updated, false otherwise.
+    */
+   acceptProposedCompletion: function JSTF_acceptProposedCompletion()
+   {
      let updated = false;
  
      let currentItem = this.autocompletePopup.selectedItem;
@@ -1950,7 +2284,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
        let suffix = currentItem.label.substring(this.lastCompletion.
                                                 matchProp.length);
        this.setInputValue(this.inputNode.value + suffix);
-@@ -5596,8 +5024,7 @@
+       updated = true;
+     }
+ 
+     this.clearCompletion();
+ 
+@@ -5591,18 +5024,17 @@ JSTerm.prototype = {
+    * Clear the object cache from the Web Console content instance.
+    *
+    * @param string aCacheId
+    *        The cache ID you want to clear. Multiple objects are cached into one
+    *        group which is given an ID.
     */
    clearObjectCache: function JST_clearObjectCache(aCacheId)
    {
@@ -1960,7 +2304,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    },
  
    /**
-@@ -5624,8 +5051,147 @@
+    * The remote object provider allows you to retrieve a given object from
+    * a specific cache and have your callback invoked when the desired object is
+    * received from the Web Console content instance.
+    *
+    * @param string aCacheId
+@@ -5619,55 +5051,198 @@ JSTerm.prototype = {
+   function JST_remoteObjectProvider(aCacheId, aObjectId, aResultCacheId,
+                                     aCallback) {
+     let message = {
+       cacheId: aCacheId,
+       objectId: aObjectId,
        resultCacheId: aResultCacheId,
      };
  
@@ -2110,7 +2464,7 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    },
  
    /**
-@@ -5633,9 +5199,20 @@
+    * Destroy the JSTerm object. Call this method to avoid memory leaks.
     */
    destroy: function JST_destroy()
    {
@@ -2131,7 +2485,7 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    },
  };
  
-@@ -5643,26 +5220,19 @@
+ /**
   * Generates and attaches the JS Terminal part of the Web Console, which
   * essentially consists of the interactive JavaScript input facility.
   *
@@ -2159,7 +2513,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
  
    if (aParentNode.ownerDocument) {
      this.xulElementFactory =
-@@ -5935,7 +5505,7 @@
+       NodeFactory("xul", "xul", aParentNode.ownerDocument);
+ 
+     this.textFactory = NodeFactory("text", "xul", aParentNode.ownerDocument);
+     this.generateUI();
+     this.attachUI();
+@@ -5930,17 +5505,17 @@ ConsoleUtils = {
+       tree.appendChild(treecols);
+ 
+       tree.appendChild(aDocument.createElement("treechildren"));
+ 
+       bodyContainer.appendChild(tree);
        node.appendChild(bodyContainer);
        node.classList.add("webconsole-msg-inspector");
        // Create the treeView object.
@@ -2168,7 +2532,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
  
        treeView.data = {
          rootCacheId: body.cacheId,
-@@ -6172,8 +5742,11 @@
+         panelCacheId: body.cacheId,
+         remoteObject: body.remoteObject,
+         remoteObjectProvider: body.remoteObjectProvider,
+       };
+ 
+@@ -6167,18 +5742,21 @@ ConsoleUtils = {
+   /**
+    * Filters a node appropriately, then sends it to the output, regrouping and
+    * pruning output as necessary.
+    *
+    * @param nsIDOMNode aNode
     *        The message node to send to the output.
     * @param string aHUDId
     *        The ID of the HUD in which to insert this node.
@@ -2182,7 +2556,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
      ConsoleUtils.filterMessageNode(aNode, aHUDId);
      let outputNode = HUDService.hudReferences[aHUDId].outputNode;
  
-@@ -6192,7 +5765,7 @@
+     let scrolledToBottom = ConsoleUtils.isOutputScrolledToBottom(outputNode);
+ 
+     let isRepeated = false;
+     if (aNode.classList.contains("webconsole-msg-cssparser")) {
+       isRepeated = this.filterRepeatedCSS(aNode, outputNode, aHUDId);
+@@ -6187,17 +5765,17 @@ ConsoleUtils = {
+     if (!isRepeated &&
+         (aNode.classList.contains("webconsole-msg-console") ||
+          aNode.classList.contains("webconsole-msg-exception") ||
+          aNode.classList.contains("webconsole-msg-error"))) {
+       isRepeated = this.filterRepeatedConsole(aNode, outputNode);
      }
  
      if (!isRepeated) {
@@ -2191,7 +2575,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
      }
  
      HUDService.regroupOutput(outputNode);
-@@ -6394,61 +5967,22 @@
+ 
+     if (pruneConsoleOutputIfNecessary(aHUDId, aNode.category) == 0) {
+       // We can't very well scroll to make the message node visible if the log
+       // limit is zero and the node was destroyed in the first place.
+       return;
+@@ -6389,86 +5967,46 @@ HeadsUpDisplayUICommands = {
+       }
+       case "saveBodies": {
+         let checked = aButton.getAttribute("checked") === "true";
+         HUDService.saveRequestAndResponseBodies = checked;
+         break;
        }
      }
    },
@@ -2257,7 +2651,9 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
    {
      if (aTopic == "content-document-global-created") {
        HUDService.windowInitializer(aSubject);
-@@ -6458,12 +5992,11 @@
+     }
+     else if (aTopic == "quit-application-granted") {
+       HUDService.shutdown();
      }
    },
  
@@ -2271,10 +2667,20 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/HUDService.jsm
  };
  
  ///////////////////////////////////////////////////////////////////////////////
-diff -r ffa6e0a7128f browser/devtools/webconsole/Makefile.in
---- a/browser/devtools/webconsole/Makefile.in	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/Makefile.in	Wed May 09 22:02:52 2012 +0300
-@@ -46,7 +46,6 @@
+ // CommandController
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ /**
+  * A controller (an instance of nsIController) that makes editing actions
+diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
+--- a/browser/devtools/webconsole/Makefile.in
++++ b/browser/devtools/webconsole/Makefile.in
+@@ -41,17 +41,16 @@ DEPTH		= ../../..
+ topsrcdir	= @top_srcdir@
+ srcdir		= @srcdir@
+ VPATH		= @srcdir@
+ 
+ include $(DEPTH)/config/autoconf.mk
  
  EXTRA_JS_MODULES = \
  		PropertyPanel.jsm \
@@ -2282,19 +2688,20 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/Makefile.in
  		NetworkHelper.jsm \
  		AutocompletePopup.jsm \
  		WebConsoleUtils.jsm \
-diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
---- a/browser/devtools/webconsole/PropertyPanel.jsm	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/PropertyPanel.jsm	Wed May 09 22:02:52 2012 +0300
-@@ -13,7 +13,7 @@
-  * for the specific language governing rights and limitations under the
-  * License.
-  *
-- * The Original Code is DevTools (HeadsUpDisplay) Console Code
-+ * The Original Code is DevTools Web Console Property Panel.
-  *
+ 		gcli.jsm \
+ 		GcliCommands.jsm \
+ 		GcliTiltCommands.jsm \
+ 		$(NULL)
+ 
+diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/webconsole/PropertyPanel.jsm
+--- a/browser/devtools/webconsole/PropertyPanel.jsm
++++ b/browser/devtools/webconsole/PropertyPanel.jsm
+@@ -18,433 +18,311 @@
   * The Initial Developer of the Original Code is
   * the Mozilla Foundation.
-@@ -23,6 +23,7 @@
+  * Portions created by the Initial Developer are Copyright (C) 2010
+  * the Initial Developer. All Rights Reserved.
+  *
   * Contributor(s):
   *   Rob Campbell <rcampbell@mozilla.com>
   *   Julian Viereck <jviereck@mozilla.com>
@@ -2302,7 +2709,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
   *
   * Alternatively, the contents of this file may be used under the terms of
   * either the GNU General Public License Version 2 or later (the "GPL"), or
-@@ -38,6 +39,8 @@
+  * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
+  * in which case the provisions of the GPL or the LGPL are applicable instead
+  * of those above. If you wish to allow use of your version of this file only
+  * under the terms of either the GPL or the LGPL, and not to allow others to
+  * use your version of this file under the terms of the MPL, indicate your
+  * decision by deleting the provisions above and replace them with the notice
+  * and other provisions required by the GPL or the LGPL. If you do not delete
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
   *
   * ***** END LICENSE BLOCK ***** */
  
@@ -2311,7 +2726,7 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
  const Cc = Components.classes;
  const Ci = Components.interfaces;
  const Cu = Components.utils;
-@@ -45,242 +48,18 @@
+ 
  Cu.import("resource://gre/modules/XPCOMUtils.jsm");
  Cu.import("resource://gre/modules/Services.jsm");
  
@@ -2560,7 +2975,7 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
  /**
   * This is an implementation of the nsITreeView interface. For comments on the
   * interface properties, see the documentation:
-@@ -288,30 +67,87 @@
+  * https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsITreeView
   */
  var PropertyTreeView = function() {
    this._rows = [];
@@ -2653,7 +3068,11 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
      if (this._treeBox) {
        this._treeBox.beginUpdateBatch();
        if (oldLen) {
-@@ -323,53 +159,66 @@
+         this._treeBox.rowCountChanged(0, -oldLen);
+       }
+       this._treeBox.rowCountChanged(0, this._rows.length);
+       this._treeBox.endUpdateBatch();
+     }
    },
  
    /**
@@ -2762,7 +3181,8 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
    },
  
    /** nsITreeView interface implementation **/
-@@ -378,10 +227,19 @@
+ 
+   selection: null,
  
    get rowCount()                     { return this._rows.length; },
    setTree: function(treeBox)         { this._treeBox = treeBox;  },
@@ -2786,7 +3206,11 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
    isContainerEmpty: function(idx)    { return false; },
    isSeparator: function(idx)         { return false; },
    isSorted: function()               { return false; },
-@@ -393,7 +251,7 @@
+   isEditable: function(idx, column)  { return false; },
+   isSelectable: function(row, col)   { return true; },
+ 
+   getParentIndex: function(idx)
+   {
      if (this.getLevel(idx) == 0) {
        return -1;
      }
@@ -2795,7 +3219,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
        if (this.isContainer(t)) {
          return t;
        }
-@@ -409,13 +267,13 @@
+     }
+     return -1;
+   },
+ 
+   hasNextSibling: function(idx, after)
+   {
+     var thisLevel = this.getLevel(idx);
+     return this._rows.slice(after + 1).some(function (r) r.level == thisLevel);
+   },
  
    toggleOpenState: function(idx)
    {
@@ -2812,7 +3244,12 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
        item.isOpened = false;
  
        var thisLevel = item.level;
-@@ -428,18 +286,38 @@
+       var t = idx + 1, deleteCount = 0;
+       while (t < this._rows.length && this.getLevel(t++) > thisLevel) {
+         deleteCount++;
+       }
+ 
+       if (deleteCount) {
          this._rows.splice(idx + 1, deleteCount);
          this._treeBox.rowCountChanged(idx + 1, -deleteCount);
        }
@@ -2858,7 +3295,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
    },
  
    getImageSrc: function(idx, column) { },
-@@ -458,7 +336,21 @@
+   getProgressMode : function(idx,column) { },
+   getCellValue: function(idx, column) { },
+   cycleHeader: function(col, elem) { },
+   selectionChanged: function() { },
+   cycleCell: function(idx, column) { },
+@@ -453,17 +331,31 @@ PropertyTreeView.prototype = {
+   performActionOnRow: function(action, row) { },
+   getRowProperties: function(idx, column, prop) { },
+   getCellProperties: function(idx, column, prop) { },
+   getColumnProperties: function(column, element, prop) { },
+ 
    setCellValue: function(row, col, value)               { },
    setCellText: function(row, col, value)                { },
    drop: function(index, orientation, dataTransfer)      { },
@@ -2881,7 +3328,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
  };
  
  ///////////////////////////////////////////////////////////////////////////
-@@ -511,21 +403,23 @@
+ //// Helper for creating the panel.
+ 
+ /**
+  * Creates a DOMNode and sets all the attributes of aAttributes on the created
+  * element.
+@@ -506,74 +398,76 @@ function appendChild(aDocument, aParent,
+ }
+ 
+ ///////////////////////////////////////////////////////////////////////////
+ //// PropertyPanel
+ 
  /**
   * Creates a new PropertyPanel.
   *
@@ -2910,7 +3367,8 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
      label: aTitle,
      titlebar: "normal",
      noautofocus: "true",
-@@ -534,13 +428,13 @@
+     noautohide: "true",
+     close: "true",
    });
  
    // Create the tree.
@@ -2927,7 +3385,7 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
      primary: "true",
      flex: 1,
      hideheader: "true",
-@@ -548,18 +442,18 @@
+     ignoreincolumnpicker: "true"
    });
    tree.appendChild(treecols);
  
@@ -2950,7 +3408,8 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
          label: button.label,
          accesskey: button.accesskey || "",
          class: button.class || "",
-@@ -568,7 +462,7 @@
+       });
+       buttonNode.addEventListener("command", button.oncommand, false);
      });
    }
  
@@ -2959,7 +3418,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
    this.panel.appendChild(footer);
  
    aParent.appendChild(this.panel);
-@@ -593,20 +487,15 @@
+ 
+   // Create the treeView object.
+   this.treeView = new PropertyTreeView();
+   this.treeView.data = aObject;
+ 
+@@ -588,25 +482,20 @@ function PropertyPanel(aParent, aDocumen
+   this.panel.addEventListener("popuphidden", function onPopupHide()
+   {
+     self.panel.removeEventListener("popuphidden", onPopupHide, false);
+     self.destroy();
+   }, false);
  }
  
  /**
@@ -2984,515 +3453,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanel.jsm
 -    this.linkNode = null;
 -  }
 -}
-diff -r ffa6e0a7128f browser/devtools/webconsole/PropertyPanelAsync.jsm
---- a/browser/devtools/webconsole/PropertyPanelAsync.jsm	Thu Apr 26 23:06:34 2012 +0300
-+++ /dev/null	Thu Jan 01 00:00:00 1970 +0000
-@@ -1,501 +0,0 @@
--/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
--/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
--/* ***** BEGIN LICENSE BLOCK *****
-- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
-- *
-- * The contents of this file are subject to the Mozilla Public License Version
-- * 1.1 (the "License"); you may not use this file except in compliance with
-- * the License. You may obtain a copy of the License at
-- * http://www.mozilla.org/MPL/
-- *
-- * Software distributed under the License is distributed on an "AS IS" basis,
-- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-- * for the specific language governing rights and limitations under the
-- * License.
-- *
-- * The Original Code is DevTools Web Console Property Panel.
-- *
-- * The Initial Developer of the Original Code is
-- * the Mozilla Foundation.
-- * Portions created by the Initial Developer are Copyright (C) 2010
-- * the Initial Developer. All Rights Reserved.
-- *
-- * Contributor(s):
-- *   Rob Campbell <rcampbell@mozilla.com>
-- *   Julian Viereck <jviereck@mozilla.com>
-- *   Mihai Sucan <mihai.sucan@gmail.com>
-- *
-- * Alternatively, the contents of this file may be used under the terms of
-- * either the GNU General Public License Version 2 or later (the "GPL"), or
-- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-- * in which case the provisions of the GPL or the LGPL are applicable instead
-- * of those above. If you wish to allow use of your version of this file only
-- * under the terms of either the GPL or the LGPL, and not to allow others to
-- * use your version of this file under the terms of the MPL, indicate your
-- * decision by deleting the provisions above and replace them with the notice
-- * and other provisions required by the GPL or the LGPL. If you do not delete
-- * the provisions above, a recipient may use your version of this file under
-- * the terms of any one of the MPL, the GPL or the LGPL.
-- *
-- * ***** END LICENSE BLOCK ***** */
--
--"use strict";
--
--const Cc = Components.classes;
--const Ci = Components.interfaces;
--const Cu = Components.utils;
--
--Cu.import("resource://gre/modules/XPCOMUtils.jsm");
--Cu.import("resource://gre/modules/Services.jsm");
--
--XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function () {
--  let obj = {};
--  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
--  return obj.WebConsoleUtils;
--});
--
--var EXPORTED_SYMBOLS = ["PropertyPanel", "PropertyTreeView"];
--
--
--///////////////////////////////////////////////////////////////////////////
--//// PropertyTreeView.
--
--/**
-- * This is an implementation of the nsITreeView interface. For comments on the
-- * interface properties, see the documentation:
-- * https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsITreeView
-- */
--var PropertyTreeView = function() {
--  this._rows = [];
--  this._objectCache = {};
--};
--
--PropertyTreeView.prototype = {
--  /**
--   * Stores the visible rows of the tree.
--   * @private
--   */
--  _rows: null,
--
--  /**
--   * Stores the nsITreeBoxObject for this tree.
--   * @private
--   */
--  _treeBox: null,
--
--  /**
--   * Stores cached information about local objects being inspected.
--   * @private
--   */
--  _objectCache: null,
--
--  /**
--   * Use this setter to update the content of the tree.
--   *
--   * @param object aObject
--   *        An object that holds information about the object you want to
--   *        display in the property panel. Object properties:
--   *        - object:
--   *        This is the raw object you want to display. You can only provide
--   *        this object if you want the property panel to work in sync mode.
--   *        - remoteObject:
--   *        An array that holds information on the remote object being
--   *        inspected. Each element in this array describes each property in the
--   *        remote object. See WebConsoleUtils.namesAndValuesOf() for details.
--   *        - rootCacheId:
--   *        The cache ID where the objects referenced in remoteObject are found.
--   *        - panelCacheId:
--   *        The cache ID where any object retrieved by this property panel
--   *        instance should be stored into.
--   *        - remoteObjectProvider:
--   *        A function that is invoked when a new object is needed. This is
--   *        called when the user tries to expand an inspectable property. The
--   *        callback must take four arguments:
--   *          - fromCacheId:
--   *          Tells from where to retrieve the object the user picked (from
--   *          which cache ID).
--   *          - objectId:
--   *          The object ID the user wants.
--   *          - panelCacheId:
--   *          Tells in which cache ID to store the objects referenced by
--   *          objectId so they can be retrieved later.
--   *          - callback:
--   *          The callback function to be invoked when the remote object is
--   *          received. This function takes one argument: the raw message
--   *          received from the Web Console content script.
--   */
--  set data(aData) {
--    let oldLen = this._rows.length;
--
--    this._cleanup();
--
--    if (!aData) {
--      return;
--    }
--
--    if (aData.remoteObject) {
--      this._rootCacheId = aData.rootCacheId;
--      this._panelCacheId = aData.panelCacheId;
--      this._remoteObjectProvider = aData.remoteObjectProvider;
--      this._rows = [].concat(aData.remoteObject);
--      this._updateRemoteObject(this._rows, 0);
--    }
--    else if (aData.object) {
--      this._rows = this._inspectObject(aData.object);
--    }
--    else {
--      throw new Error("First argument must have a .remoteObject or " +
--                      "an .object property!");
--    }
--
--    if (this._treeBox) {
--      this._treeBox.beginUpdateBatch();
--      if (oldLen) {
--        this._treeBox.rowCountChanged(0, -oldLen);
--      }
--      this._treeBox.rowCountChanged(0, this._rows.length);
--      this._treeBox.endUpdateBatch();
--    }
--  },
--
--  /**
--   * Update a remote object so it can be used with the tree view. This method
--   * adds properties to each array element.
--   *
--   * @private
--   * @param array aObject
--   *        The remote object you want prepared for use with the tree view.
--   * @param number aLevel
--   *        The level you want to give to each property in the remote object.
--   */
--  _updateRemoteObject: function PTV__updateRemoteObject(aObject, aLevel)
--  {
--    aObject.forEach(function(aElement) {
--      aElement.level = aLevel;
--      aElement.isOpened = false;
--      aElement.children = null;
--    });
--  },
--
--  /**
--   * Inspect a local object.
--   *
--   * @private
--   * @param object aObject
--   *        The object you want to inspect.
--   */
--  _inspectObject: function PTV__inspectObject(aObject)
--  {
--    this._objectCache = {};
--    this._remoteObjectProvider = this._localObjectProvider.bind(this);
--    let children = WebConsoleUtils.namesAndValuesOf(aObject, this._objectCache);
--    this._updateRemoteObject(children, 0);
--    return children;
--  },
--
--  /**
--   * An object provider for when the user inspects local objects (not remote
--   * ones).
--   *
--   * @private
--   * @param string aFromCacheId
--   *        The cache ID from where to retrieve the desired object.
--   * @param string aObjectId
--   *        The ID of the object you want.
--   * @param string aDestCacheId
--   *        The ID of the cache where to store any objects referenced by the
--   *        desired object.
--   * @param function aCallback
--   *        The function you want to receive the object.
--   */
--  _localObjectProvider:
--  function PTV__localObjectProvider(aFromCacheId, aObjectId, aDestCacheId,
--                                    aCallback)
--  {
--    let object = WebConsoleUtils.namesAndValuesOf(this._objectCache[aObjectId],
--                                                  this._objectCache);
--    aCallback({cacheId: aFromCacheId,
--               objectId: aObjectId,
--               object: object,
--               childrenCacheId: aDestCacheId || aFromCacheId,
--    });
--  },
--
--  /** nsITreeView interface implementation **/
--
--  selection: null,
--
--  get rowCount()                     { return this._rows.length; },
--  setTree: function(treeBox)         { this._treeBox = treeBox;  },
--  getCellText: function(idx, column) {
--    let row = this._rows[idx];
--    return row.name + ": " + row.value;
--  },
--  getLevel: function(idx) {
--    return this._rows[idx].level;
--  },
--  isContainer: function(idx) {
--    return !!this._rows[idx].inspectable;
--  },
--  isContainerOpen: function(idx) {
--    return this._rows[idx].isOpened;
--  },
--  isContainerEmpty: function(idx)    { return false; },
--  isSeparator: function(idx)         { return false; },
--  isSorted: function()               { return false; },
--  isEditable: function(idx, column)  { return false; },
--  isSelectable: function(row, col)   { return true; },
--
--  getParentIndex: function(idx)
--  {
--    if (this.getLevel(idx) == 0) {
--      return -1;
--    }
--    for (var t = idx - 1; t >= 0; t--) {
--      if (this.isContainer(t)) {
--        return t;
--      }
--    }
--    return -1;
--  },
--
--  hasNextSibling: function(idx, after)
--  {
--    var thisLevel = this.getLevel(idx);
--    return this._rows.slice(after + 1).some(function (r) r.level == thisLevel);
--  },
--
--  toggleOpenState: function(idx)
--  {
--    let item = this._rows[idx];
--    if (!item.inspectable) {
--      return;
--    }
--
--    if (item.isOpened) {
--      this._treeBox.beginUpdateBatch();
--      item.isOpened = false;
--
--      var thisLevel = item.level;
--      var t = idx + 1, deleteCount = 0;
--      while (t < this._rows.length && this.getLevel(t++) > thisLevel) {
--        deleteCount++;
--      }
--
--      if (deleteCount) {
--        this._rows.splice(idx + 1, deleteCount);
--        this._treeBox.rowCountChanged(idx + 1, -deleteCount);
--      }
--      this._treeBox.invalidateRow(idx);
--      this._treeBox.endUpdateBatch();
--    }
--    else {
--      let levelUpdate = true;
--      let callback = function _onRemoteResponse(aResponse) {
--        this._treeBox.beginUpdateBatch();
--        item.isOpened = true;
--
--        if (levelUpdate) {
--          this._updateRemoteObject(aResponse.object, item.level + 1);
--          item.children = aResponse.object;
--        }
--
--        this._rows.splice.apply(this._rows, [idx + 1, 0].concat(item.children));
--
--        this._treeBox.rowCountChanged(idx + 1, item.children.length);
--        this._treeBox.invalidateRow(idx);
--        this._treeBox.endUpdateBatch();
--      }.bind(this);
--
--      if (!item.children) {
--        let fromCacheId = item.level > 0 ? this._panelCacheId :
--                                           this._rootCacheId;
--        this._remoteObjectProvider(fromCacheId, item.objectId,
--                                   this._panelCacheId, callback);
--      }
--      else {
--        levelUpdate = false;
--        callback({object: item.children});
--      }
--    }
--  },
--
--  getImageSrc: function(idx, column) { },
--  getProgressMode : function(idx,column) { },
--  getCellValue: function(idx, column) { },
--  cycleHeader: function(col, elem) { },
--  selectionChanged: function() { },
--  cycleCell: function(idx, column) { },
--  performAction: function(action) { },
--  performActionOnCell: function(action, index, column) { },
--  performActionOnRow: function(action, row) { },
--  getRowProperties: function(idx, column, prop) { },
--  getCellProperties: function(idx, column, prop) { },
--  getColumnProperties: function(column, element, prop) { },
--
--  setCellValue: function(row, col, value)               { },
--  setCellText: function(row, col, value)                { },
--  drop: function(index, orientation, dataTransfer)      { },
--  canDrop: function(index, orientation, dataTransfer)   { return false; },
--
--  _cleanup: function PTV__cleanup()
--  {
--    if (this._rows.length) {
--      // Reset the existing _rows children to the initial state.
--      this._updateRemoteObject(this._rows, 0);
--      this._rows = [];
--    }
--
--    delete this._objectCache;
--    delete this._rootCacheId;
--    delete this._panelCacheId;
--    delete this._remoteObjectProvider;
--  },
--};
--
--///////////////////////////////////////////////////////////////////////////
--//// Helper for creating the panel.
--
--/**
-- * Creates a DOMNode and sets all the attributes of aAttributes on the created
-- * element.
-- *
-- * @param nsIDOMDocument aDocument
-- *        Document to create the new DOMNode.
-- * @param string aTag
-- *        Name of the tag for the DOMNode.
-- * @param object aAttributes
-- *        Attributes set on the created DOMNode.
-- * @returns nsIDOMNode
-- */
--function createElement(aDocument, aTag, aAttributes)
--{
--  let node = aDocument.createElement(aTag);
--  for (var attr in aAttributes) {
--    node.setAttribute(attr, aAttributes[attr]);
--  }
--  return node;
--}
--
--/**
-- * Creates a new DOMNode and appends it to aParent.
-- *
-- * @param nsIDOMDocument aDocument
-- *        Document to create the new DOMNode.
-- * @param nsIDOMNode aParent
-- *        A parent node to append the created element.
-- * @param string aTag
-- *        Name of the tag for the DOMNode.
-- * @param object aAttributes
-- *        Attributes set on the created DOMNode.
-- * @returns nsIDOMNode
-- */
--function appendChild(aDocument, aParent, aTag, aAttributes)
--{
--  let node = createElement(aDocument, aTag, aAttributes);
--  aParent.appendChild(node);
--  return node;
--}
--
--///////////////////////////////////////////////////////////////////////////
--//// PropertyPanel
--
--/**
-- * Creates a new PropertyPanel.
-- *
-- * @see PropertyTreeView
-- * @param nsIDOMNode aParent
-- *        Parent node to append the created panel to.
-- * @param string aTitle
-- *        Title for the panel.
-- * @param string aObject
-- *        Object to display in the tree. For details about this object please
-- *        see the PropertyTreeView.data property in this file.
-- * @param array of objects aButtons
-- *        Array with buttons to display at the bottom of the panel.
-- */
--function PropertyPanel(aParent, aTitle, aObject, aButtons)
--{
--  let document = aParent.ownerDocument;
--
--  // Create the underlying panel
--  this.panel = createElement(document, "panel", {
--    label: aTitle,
--    titlebar: "normal",
--    noautofocus: "true",
--    noautohide: "true",
--    close: "true",
--  });
--
--  // Create the tree.
--  let tree = this.tree = createElement(document, "tree", {
--    flex: 1,
--    hidecolumnpicker: "true"
--  });
--
--  let treecols = document.createElement("treecols");
--  appendChild(document, treecols, "treecol", {
--    primary: "true",
--    flex: 1,
--    hideheader: "true",
--    ignoreincolumnpicker: "true"
--  });
--  tree.appendChild(treecols);
--
--  tree.appendChild(document.createElement("treechildren"));
--  this.panel.appendChild(tree);
--
--  // Create the footer.
--  let footer = createElement(document, "hbox", { align: "end" });
--  appendChild(document, footer, "spacer", { flex: 1 });
--
--  // The footer can have butttons.
--  let self = this;
--  if (aButtons) {
--    aButtons.forEach(function(button) {
--      let buttonNode = appendChild(document, footer, "button", {
--        label: button.label,
--        accesskey: button.accesskey || "",
--        class: button.class || "",
--      });
--      buttonNode.addEventListener("command", button.oncommand, false);
--    });
--  }
--
--  appendChild(document, footer, "resizer", { dir: "bottomend" });
--  this.panel.appendChild(footer);
--
--  aParent.appendChild(this.panel);
--
--  // Create the treeView object.
--  this.treeView = new PropertyTreeView();
--  this.treeView.data = aObject;
--
--  // Set the treeView object on the tree view. This has to be done *after* the
--  // panel is shown. This is because the tree binding must be attached first.
--  this.panel.addEventListener("popupshown", function onPopupShow()
--  {
--    self.panel.removeEventListener("popupshown", onPopupShow, false);
--    self.tree.view = self.treeView;
--  }, false);
--
--  this.panel.addEventListener("popuphidden", function onPopupHide()
--  {
--    self.panel.removeEventListener("popuphidden", onPopupHide, false);
--    self.destroy();
--  }, false);
--}
--
--/**
-- * Destroy the PropertyPanel. This closes the panel and removes it from the
-- * browser DOM.
-- */
--PropertyPanel.prototype.destroy = function PP_destroy()
--{
--  this.treeView.data = null;
--  this.panel.parentNode.removeChild(this.panel);
--  this.treeView = null;
--  this.panel = null;
--  this.tree = null;
--}
--
-diff -r ffa6e0a7128f browser/devtools/webconsole/WebConsoleUtils.jsm
---- a/browser/devtools/webconsole/WebConsoleUtils.jsm	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/WebConsoleUtils.jsm	Wed May 09 22:02:52 2012 +0300
-@@ -44,14 +44,14 @@
+diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
+--- a/browser/devtools/webconsole/WebConsoleUtils.jsm
++++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
+@@ -1,24 +1,24 @@
+ /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+ /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+  * You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  "use strict";
  
@@ -3511,7 +3480,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/WebConsoleUtils.jsm
  
  const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
  
-@@ -441,7 +441,7 @@
+ const TYPES = { OBJECT: 0,
+                 FUNCTION: 1,
+                 ARRAY: 2,
+                 OTHER: 3,
+                 ITERATOR: 4,
+@@ -398,33 +398,34 @@ var WebConsoleUtils = {
+           display: presentable.substring(0, presentable.indexOf(')') + 1)
+         };
+ 
+       default:
+         presentable = String(aObject);
          let m = /^\[object (\S+)\]/.exec(presentable);
  
          try {
@@ -3520,7 +3499,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/WebConsoleUtils.jsm
                m && m[1] == "Generator") {
              return {
                type: TYPES.GENERATOR,
-@@ -457,7 +457,8 @@
+               display: m[1]
+             };
+           }
+         }
+         catch (ex) {
+           // window.history.next throws in the typeof check above.
+           return {
+             type: TYPES.OBJECT,
+             display: m ? m[1] : "Object"
            };
          }
  
@@ -3530,7 +3517,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/WebConsoleUtils.jsm
            return {
              type: TYPES.ITERATOR,
              display: "Iterator"
-@@ -552,10 +553,11 @@
+           };
+         }
+ 
+         return {
+           type: TYPES.OBJECT,
+@@ -509,31 +510,37 @@ var WebConsoleUtils = {
+    *         referenced by the property of aObject.
+    */
+   namesAndValuesOf: function WCU_namesAndValuesOf(aObject, aObjectCache)
+   {
+     let pairs = [];
      let value, presentable;
  
      let isDOMDocument = aObject instanceof Ci.nsIDOMDocument;
@@ -3544,7 +3541,9 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/WebConsoleUtils.jsm
          continue;
        }
  
-@@ -565,8 +567,13 @@
+       // Also skip non-native getters.
+       if (this.isNonNativeGetter(aObject, propName)) {
+         value = "";
          presentable = {type: TYPES.GETTER, display: "Getter"};
        }
        else {
@@ -3560,7 +3559,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/WebConsoleUtils.jsm
        }
  
        let pair = {};
-@@ -742,3 +749,229 @@
+       pair.name = propName;
+       pair.value = presentable.display;
+       pair.inspectable = false;
+       pair.type = presentable.type;
+ 
+@@ -699,8 +706,234 @@ WebConsoleUtils.l10n = {
+     }
+     return result;
+   },
+ };
+ 
  XPCOMUtils.defineLazyGetter(WebConsoleUtils.l10n, "stringBundle", function() {
    return Services.strings.createBundle(STRINGS_URI);
  });
@@ -3790,10 +3799,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/WebConsoleUtils.jsm
 +
 +return JSPropertyProvider;
 +})(WebConsoleUtils);
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js	Wed May 09 22:02:52 2012 +0300
-@@ -41,12 +41,14 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
+@@ -36,40 +36,40 @@
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "data:text/html;charset=utf-8,<p>bug 585991 - autocomplete popup keyboard usage test";
+ let HUD;
  
  function test() {
    addTab(TEST_URI);
@@ -3812,7 +3826,8 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_585
  
    content.wrappedJSObject.foobarBug585991 = {
      "item0": "value0",
-@@ -55,16 +57,14 @@
+     "item1": "value1",
+     "item2": "value2",
      "item3": "value3",
    };
  
@@ -3831,7 +3846,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_585
  
      ok(popup.isOpen, "popup is open");
  
-@@ -112,7 +112,7 @@
+     is(popup.itemCount, 4, "popup.itemCount is correct");
+ 
+     let sameItems = popup.getItems();
+     is(sameItems.every(function(aItem, aIndex) {
+       return aItem.label == "item" + aIndex;
+@@ -107,43 +107,43 @@ function tabLoaded() {
+ 
+ function autocompletePopupHidden()
+ {
+   let jsterm = HUD.jsterm;
+   let popup = jsterm.autocompletePopup;
    let completeNode = jsterm.completeNode;
    let inputNode = jsterm.inputNode;
  
@@ -3840,7 +3865,8 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_585
  
    ok(!popup.isOpen, "popup is not open");
  
-@@ -121,8 +121,8 @@
+   is(inputNode.value, "window.foobarBug585991.item0",
+      "completion was successful after VK_TAB");
  
    ok(!completeNode.value, "completeNode is empty");
  
@@ -3851,7 +3877,14 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_585
  
      ok(popup.isOpen, "popup is open");
  
-@@ -137,8 +137,8 @@
+     is(popup.itemCount, 4, "popup.itemCount is correct");
+ 
+     is(popup.selectedIndex, -1, "no index is selected");
+     EventUtils.synthesizeKey("VK_DOWN", {});
+     
+     let prefix = jsterm.inputNode.value.replace(/[\S]/g, " ");
+ 
+     is(popup.selectedIndex, 0, "index 0 is selected");
      is(popup.selectedItem.label, "item0", "item0 is selected");
      is(completeNode.value, prefix + "item0", "completeNode.value holds item0");
  
@@ -3862,7 +3895,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_585
  
        ok(!popup.isOpen, "popup is not open after VK_ESCAPE");
  
-@@ -168,8 +168,8 @@
+       is(inputNode.value, "window.foobarBug585991.",
+          "completion was cancelled");
+ 
+       ok(!completeNode.value, "completeNode is empty");
+ 
+@@ -163,18 +163,18 @@ function autocompletePopupHidden()
+ 
+ function testReturnKey()
+ {
+   let jsterm = HUD.jsterm;
+   let popup = jsterm.autocompletePopup;
    let completeNode = jsterm.completeNode;
    let inputNode = jsterm.inputNode;
  
@@ -3873,7 +3916,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_585
  
      ok(popup.isOpen, "popup is open");
  
-@@ -190,8 +190,8 @@
+     is(popup.itemCount, 4, "popup.itemCount is correct");
+     
+     is(popup.selectedIndex, -1, "no index is selected");
+     EventUtils.synthesizeKey("VK_DOWN", {});
+ 
+@@ -185,18 +185,18 @@ function testReturnKey()
+     is(completeNode.value, prefix + "item0", "completeNode.value holds item0");
+ 
+     EventUtils.synthesizeKey("VK_DOWN", {});
+ 
+     is(popup.selectedIndex, 1, "index 1 is selected");
      is(popup.selectedItem.label, "item1", "item1 is selected");
      is(completeNode.value, prefix + "item1", "completeNode.value holds item1");
  
@@ -3884,10 +3937,20 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_585
  
        ok(!popup.isOpen, "popup is not open after VK_RETURN");
  
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js	Wed May 09 22:02:52 2012 +0300
-@@ -13,12 +13,8 @@
+       is(inputNode.value, "window.foobarBug585991.item1",
+          "completion was successful after VK_RETURN");
+ 
+       ok(!completeNode.value, "completeNode is empty");
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
+@@ -8,67 +8,62 @@
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ let HUD;
  
  let outputItem;
  
@@ -3902,7 +3965,7 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_594
  
    outputNode = HUD.outputNode;
  
-@@ -26,11 +22,10 @@
+   browser.addEventListener("load", tabLoad2, true);
  
    // Reload so we get some output in the console.
    browser.contentWindow.location.reload();
@@ -3915,7 +3978,11 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_594
  
    outputItem = outputNode.querySelector(".hud-networkinfo .hud-clickable");
    ok(outputItem, "found a network message");
-@@ -42,7 +37,7 @@
+   document.addEventListener("popupshown", networkPanelShown, false);
+ 
+   // Send the mousedown and click events such that the network panel opens.
+   EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
+   EventUtils.sendMouseEvent({type: "click"}, outputItem);
  }
  
  function networkPanelShown(aEvent) {
@@ -3924,7 +3991,14 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_594
  
    document.addEventListener("popupshown", networkPanelShowFailure, false);
  
-@@ -57,13 +52,13 @@
+   // The network panel should not open for the second time.
+   EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
+   EventUtils.sendMouseEvent({type: "click"}, outputItem);
+ 
+   executeSoon(function() {
+     aEvent.target.addEventListener("popuphidden", networkPanelHidden, false);
+     aEvent.target.hidePopup();
+   });
  }
  
  function networkPanelShowFailure(aEvent) {
@@ -3940,7 +4014,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_594
  
    // The network panel should not show because this is a mouse event that starts
    // in a position and ends in another.
-@@ -92,20 +87,27 @@
+   EventUtils.sendMouseEvent({type: "mousedown", clientX: 3, clientY: 4},
+     outputItem);
+   EventUtils.sendMouseEvent({type: "click", clientX: 5, clientY: 6},
+     outputItem);
+ 
+@@ -87,51 +82,58 @@ function networkPanelHidden(aEvent) {
+   executeSoon(function() {
+     document.removeEventListener("popupshown", networkPanelShowFailure, false);
+ 
+     // Done with the network output. Now test the jsterm output and the property
+     // panel.
      HUD.jsterm.setInputValue("document");
      HUD.jsterm.execute();
  
@@ -3978,7 +4062,14 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_594
  
    document.addEventListener("popupshown", propertyPanelShowFailure, false);
  
-@@ -120,13 +122,13 @@
+   // The property panel should not open for the second time.
+   EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
+   EventUtils.sendMouseEvent({type: "click"}, outputItem);
+ 
+   executeSoon(function() {
+     aEvent.target.addEventListener("popuphidden", propertyPanelHidden, false);
+     aEvent.target.hidePopup();
+   });
  }
  
  function propertyPanelShowFailure(aEvent) {
@@ -3994,7 +4085,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_594
  
    // The property panel should not show because this is a mouse event that
    // starts in a position and ends in another.
-@@ -149,13 +151,16 @@
+   EventUtils.sendMouseEvent({type: "mousedown", clientX: 3, clientY: 4},
+     outputItem);
+   EventUtils.sendMouseEvent({type: "click", clientX: 5, clientY: 6},
+     outputItem);
+ 
+@@ -144,18 +146,21 @@ function propertyPanelHidden(aEvent) {
+   // The property panel should not show because this is a right-click.
+   EventUtils.sendMouseEvent({type: "mousedown", button: 2},
+     outputItem);
+   EventUtils.sendMouseEvent({type: "click", button: 2},
+     outputItem);
  
    executeSoon(function() {
      document.removeEventListener("popupshown", propertyPanelShowFailure, false);
@@ -4014,10 +4115,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_594
 +  }, true);
  }
  
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js	Wed May 09 22:02:52 2012 +0300
-@@ -169,6 +169,18 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+@@ -164,25 +164,63 @@ function testGen() {
+ 
+   HUD.jsterm.clearOutput();
+ 
+   // Test jsterm print() output.
+ 
    HUD.jsterm.setInputValue("print(" + inputValue + ")");
    HUD.jsterm.execute();
  
@@ -4036,7 +4142,9 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_598
    outputItem = HUD.outputNode.querySelector(".webconsole-msg-output:" +
                                              "last-child");
    ok(outputItem,
-@@ -178,6 +190,32 @@
+     "found the jsterm print() output line for inputValues[" + cpos + "]");
+   ok(outputItem.textContent.indexOf(printOutput) > -1,
+     "jsterm print() output is correct for inputValues[" + cpos + "]");
  
    // Test jsterm execution output.
  
@@ -4069,7 +4177,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_598
    let eventHandlerID = eventHandlers.length + 1;
  
    let propertyPanelShown = function(aEvent) {
-@@ -205,19 +243,6 @@
+     let label = aEvent.target.getAttribute("label");
+     if (!label || label.indexOf(inputValue) == -1) {
+       return;
+     }
+ 
+@@ -200,29 +238,16 @@ function testGen() {
+       subtestNext();
+     }
+   };
+ 
+   document.addEventListener("popupshown", propertyPanelShown, false);
  
    eventHandlers.push(propertyPanelShown);
  
@@ -4089,7 +4207,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_598
    // Send the mousedown, mouseup and click events to check if the property
    // panel opens.
    EventUtils.sendMouseEvent({ type: "mousedown" }, messageBody, window);
-@@ -251,7 +276,7 @@
+   EventUtils.sendMouseEvent({ type: "click" }, messageBody, window);
+ 
+   if (showsPropertyPanel) {
+     yield; // wait for the panel to open if we need to.
+   }
+@@ -246,17 +271,17 @@ function testEnd() {
+   }
+ 
+   for (let i = 0; i < inputValues.length; i++) {
+     if (inputValues[i][0] && !popupShown[i]) {
+       ok(false, "the property panel failed to show for inputValues[" + i + "]");
      }
    }
  
@@ -4098,10 +4226,20 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_598
    executeSoon(finishTest);
  }
  
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js	Wed May 09 22:02:52 2012 +0300
-@@ -40,12 +40,13 @@
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", tabLoad, true);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
+@@ -35,22 +35,23 @@
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
  
  function test() {
    addTab(TEST_URI);
@@ -4120,7 +4258,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_618
    }, true);
  }
  
-@@ -63,9 +64,6 @@
+ function tabLoaded() {
+   browser.removeEventListener("load", tabLoaded, true);
+ 
+   let hudId = HUDService.getHudIdByWindow(content);
+   let HUD = HUDService.hudReferences[hudId];
+@@ -58,19 +59,16 @@ function tabLoaded() {
+   HUD.jsterm.execute("document");
+ 
+   let networkMessage = HUD.outputNode.querySelector(".webconsole-msg-network");
+   ok(networkMessage, "found network message");
+ 
    let networkLink = networkMessage.querySelector(".webconsole-msg-link");
    ok(networkLink, "found network message link");
  
@@ -4130,7 +4278,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_618
    let popupset = document.getElementById("mainPopupSet");
    ok(popupset, "found #mainPopupSet");
  
-@@ -118,6 +116,18 @@
+   let popupsShown = 0;
+   let hiddenPopups = 0;
+ 
+   let onpopupshown = function() {
+     popupsShown++;
+@@ -113,11 +111,23 @@ function tabLoaded() {
+ 
+   registerCleanupFunction(function() {
+     is(popupsShown, 2, "correct number of popups shown");
+     if (popupsShown != 2) {
+       document.removeEventListener("popupshown", onpopupshown, false);
      }
    });
  
@@ -4151,10 +4309,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_618
 +    failureFn: finishTest,
 +  });
  }
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js	Wed May 09 22:02:52 2012 +0300
-@@ -79,9 +79,6 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
+@@ -74,19 +74,16 @@ function tabLoaded() {
+   HUD.jsterm.execute("document");
+ 
+   let networkMessage = HUD.outputNode.querySelector(".webconsole-msg-network");
+   ok(networkMessage, "found network message");
+ 
    let networkLink = networkMessage.querySelector(".webconsole-msg-link");
    ok(networkLink, "found network message link");
  
@@ -4164,7 +4327,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_618
    let popupset = document.getElementById("mainPopupSet");
    ok(popupset, "found #mainPopupSet");
  
-@@ -145,8 +142,20 @@
+   let popupsShown = 0;
+   let hiddenPopups = 0;
+ 
+   let onpopupshown = function() {
+     popupsShown++;
+@@ -140,18 +137,30 @@ function tabLoaded() {
+   registerCleanupFunction(function() {
+     is(popupsShown, 2, "correct number of popups shown");
+     if (popupsShown != 2) {
+       document.removeEventListener("popupshown", onpopupshown, false);
+     }
    });
  
    // Show the network and object inspector panels.
@@ -4187,10 +4360,20 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_618
  }
  
  function togglePBAndThen(callback) {
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js	Wed May 09 22:02:52 2012 +0300
-@@ -9,35 +9,60 @@
+   function pbObserver(aSubject, aTopic, aData) {
+     if (aTopic != "private-browsing-transition-complete") {
+       return;
+     }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
+@@ -4,40 +4,65 @@
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  *
+  * Contributor(s):
+  *   Mihai Sucan <mihai.sucan@gmail.com>
+  */
  
  const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-621644-jsterm-dollar.html";
  
@@ -4270,10 +4453,14 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_621
 +    openConsole(null, test$);
 +  }, true);
  }
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js	Wed May 09 22:02:52 2012 +0300
-@@ -5,26 +5,27 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
+@@ -1,45 +1,46 @@
+ /* Any copyright is dedicated to the Public Domain.
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-632275-getters.html";
  
  function test() {
    addTab(TEST_URI);
@@ -4313,7 +4500,8 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_632
    };
  
    ok(!find(/^(width|height):/), "no document.width/height");
-@@ -33,8 +34,8 @@
+ 
+   panel.destroy();
  
    let getterValue = doc.foobar._val;
  
@@ -4324,10 +4512,20 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_632
  
    is(getterValue, doc.foobar._val, "getter did not execute");
    is(getterValue+1, doc.foobar.val, "getter executed");
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js	Wed May 09 22:02:52 2012 +0300
-@@ -40,27 +40,25 @@
+   is(getterValue+1, doc.foobar._val, "getter executed (recheck)");
+ 
+   ok(find(/^val: Getter$/),
+      "getter is properly displayed");
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+@@ -35,103 +35,123 @@
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-632347-iterators-generators.html";
  
  function test() {
    addTab(TEST_URI);
@@ -4363,7 +4561,8 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_632
    is(completion, null, "no matchees for gen1");
    ok(!WCU.isObjectInspectable(win.gen1),
       "gen1 is not inspectable");
-@@ -69,7 +67,7 @@
+ 
+   is(result+1, win.gen1.next(), "gen1.next() did not execute");
  
    result = win.gen2.next();
  
@@ -4372,7 +4571,11 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_632
    is(completion, null, "no matchees for gen2");
    ok(!WCU.isObjectInspectable(win.gen2),
       "gen2 is not inspectable");
-@@ -81,7 +79,7 @@
+ 
+   is((result/2+1)*2, win.gen2.next(),
+      "gen2.next() did not execute");
+ 
+   result = win.iter1.next();
    is(result[0], "foo", "iter1.next() [0] is correct");
    is(result[1], "bar", "iter1.next() [1] is correct");
  
@@ -4381,7 +4584,8 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_632
    is(completion, null, "no matchees for iter1");
    ok(!WCU.isObjectInspectable(win.iter1),
       "iter1 is not inspectable");
-@@ -90,27 +88,57 @@
+ 
+   result = win.iter1.next();
    is(result[0], "baz", "iter1.next() [0] is correct");
    is(result[1], "baaz", "iter1.next() [1] is correct");
  
@@ -4449,7 +4653,14 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_632
    };
  
    ok(find("gen1: Generator", false),
-@@ -125,13 +153,5 @@
+      "gen1 is correctly displayed in the Property Panel");
+ 
+   ok(find("gen2: Generator", false),
+      "gen2 is correctly displayed in the Property Panel");
+ 
+   ok(find("iter1: Iterator", false),
+      "iter1 is correctly displayed in the Property Panel");
+ 
    ok(find("iter2: Iterator", false),
       "iter2 is correctly displayed in the Property Panel");
  
@@ -4464,10 +4675,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_632
 -  finishTest();
 +  executeSoon(finishTest);
  }
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js	Wed May 09 22:02:52 2012 +0300
-@@ -8,13 +8,7 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js
+@@ -3,80 +3,100 @@
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ const TEST_URI = "data:text/html;charset=utf-8,<p>test for bug 642615";
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
                                     "@mozilla.org/widget/clipboardhelper;1",
                                     "nsIClipboardHelper");
  
@@ -4482,7 +4698,9 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_642
    let jsterm = HUD.jsterm;
    let stringToCopy = "foobazbarBug642615";
  
-@@ -24,41 +18,11 @@
+   jsterm.clearOutput();
+ 
+   ok(!jsterm.completeNode.value, "no completeNode.value");
  
    jsterm.setInputValue("doc");
  
@@ -4528,7 +4746,7 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_642
  
      // Arguments: expected, setup, success, failure.
      waitForClipboard(
-@@ -66,17 +30,73 @@
+       stringToCopy,
        function() {
          clipboardHelper.copyString(stringToCopy);
        },
@@ -4608,10 +4826,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_642
 +    openConsole(null, consoleOpened);
 +  }, true);
  }
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js	Wed May 09 22:02:52 2012 +0300
-@@ -6,38 +6,36 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+@@ -1,48 +1,46 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  */
  
  // Tests that document.body autocompletes in the web console.
  
@@ -4665,7 +4888,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_651
  
      popup._panel.addEventListener("popuphidden", autocompletePopupHidden, false);
  
-@@ -55,32 +53,80 @@
+     EventUtils.synthesizeKey("VK_ESCAPE", {});
+   }, false);
+ 
+   jsterm.setInputValue("document.body");
+   EventUtils.synthesizeKey(".", {});
+@@ -50,37 +48,85 @@ function onLoad(aEvent) {
+ 
+ function autocompletePopupHidden()
+ {
+   let jsterm = gHUD.jsterm;
+   let popup = jsterm.autocompletePopup;
    let completeNode = jsterm.completeNode;
    let inputNode = jsterm.inputNode;
  
@@ -4759,10 +4992,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_651
    executeSoon(finishTest);
  }
  
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js	Wed May 09 22:02:52 2012 +0300
-@@ -40,11 +40,9 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
+@@ -35,21 +35,19 @@
+  * and other provisions required by the GPL or the LGPL. If you do not delete
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
  
  // Tests that the $0 console helper works as intended.
  
@@ -4775,7 +5013,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_653
    let div = doc.createElement("div");
    let h1 = doc.createElement("h1");
    let p1 = doc.createElement("p");
-@@ -79,7 +77,7 @@
+   let p2 = doc.createElement("p");
+   let div2 = doc.createElement("div");
+   let p3 = doc.createElement("p");
+   doc.title = "Inspector Tree Selection Test";
+   h1.textContent = "Inspector Tree Selection Test";
+@@ -74,74 +72,104 @@ function createDocument()
+   div2.appendChild(p3);
+   doc.body.appendChild(div);
+   doc.body.appendChild(div2);
+   setupHighlighterTests();
+ }
  
  function setupHighlighterTests()
  {
@@ -4784,7 +5032,13 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_653
    ok(h1, "we have the header node");
    Services.obs.addObserver(runSelectionTests,
      InspectorUI.INSPECTOR_NOTIFICATIONS.OPENED, false);
-@@ -93,6 +91,7 @@
+   InspectorUI.toggleInspectorUI();
+ }
+ 
+ function runSelectionTests()
+ {
+   Services.obs.removeObserver(runSelectionTests,
+     InspectorUI.INSPECTOR_NOTIFICATIONS.OPENED, false);
  
    executeSoon(function() {
      InspectorUI.highlighter.addListener("nodeselected", performTestComparisons);
@@ -4792,7 +5046,9 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_653
      EventUtils.synthesizeMouse(h1, 2, 2, {type: "mousemove"}, content);
    });
  }
-@@ -102,6 +101,8 @@
+ 
+ function performTestComparisons()
+ {
    InspectorUI.highlighter.removeListener("nodeselected", performTestComparisons);
  
    InspectorUI.stopInspecting();
@@ -4801,7 +5057,13 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_653
    is(InspectorUI.highlighter.node, h1, "node selected");
    is(InspectorUI.selection, h1, "selection matches node");
  
-@@ -115,16 +116,44 @@
+   openConsole(gBrowser.selectedTab, performWebConsoleTests);
+ }
+ 
+ function performWebConsoleTests(hud)
+ {
+   let jsterm = hud.jsterm;
+   outputNode = hud.outputNode;
  
    jsterm.clearOutput();
    jsterm.execute("$0");
@@ -4854,7 +5116,13 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_653
  }
  
  function finishUp() {
-@@ -138,7 +167,6 @@
+   InspectorUI.closeInspectorUI();
+   finishTest();
+ }
+ 
+ function test()
+ {
+   waitForExplicitFinish();
    gBrowser.selectedTab = gBrowser.addTab();
    gBrowser.selectedBrowser.addEventListener("load", function() {
      gBrowser.selectedBrowser.removeEventListener("load", arguments.callee, true);
@@ -4862,10 +5130,18 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_bug_653
      waitForFocus(createDocument, content);
    }, true);
  
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_chrome.js
---- a/browser/devtools/webconsole/test/browser_webconsole_chrome.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_chrome.js	Wed May 09 22:02:52 2012 +0300
-@@ -41,6 +41,7 @@
+   content.location = "data:text/html;charset=utf-8,test for highlighter helper in web console";
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_chrome.js b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_chrome.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
+@@ -36,16 +36,17 @@
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
  // Tests that code completion works properly.
  
  function test() {
@@ -4873,7 +5149,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_chrome.
    addTab(getBrowserURL());
    browser.addEventListener("DOMContentLoaded", function onLoad() {
      browser.removeEventListener("DOMContentLoaded", onLoad, true);
-@@ -63,10 +64,12 @@
+     openConsole();
+     testChrome(HUDService.getHudByWindow(content));
+   }, true);
+ }
+ 
+@@ -58,15 +59,17 @@ function testChrome(hud) {
+   ok(jsterm, "we have a jsterm");
+ 
+   let input = jsterm.inputNode;
+   ok(hud.outputNode, "we have an output node");
+ 
    // Test typing 'docu'.
    input.value = "docu";
    input.setSelectionRange(4, 4);
@@ -4891,10 +5177,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_chrome.
 +  });
  }
  
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_completion.js
---- a/browser/devtools/webconsole/test/browser_webconsole_completion.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_completion.js	Wed May 09 22:02:52 2012 +0300
-@@ -40,32 +40,46 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_completion.js b/browser/devtools/webconsole/test/browser_webconsole_completion.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_completion.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_completion.js
+@@ -35,74 +35,98 @@
+  * and other provisions required by the GPL or the LGPL. If you do not delete
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
  
  // Tests that code completion works properly.
  
@@ -4953,7 +5244,8 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_complet
    is(input.value, "document", "'docu' tab completion");
    is(input.selectionStart, 8, "start selection is alright");
    is(input.selectionEnd, 8, "end selection is alright");
-@@ -74,35 +88,45 @@
+   is(jsterm.completeNode.value.replace(/ /g, ""), "", "'docu' completed");
+ 
    // Test typing 'document.getElem'.
    input.value = "document.getElem";
    input.setSelectionRange(16, 16);
@@ -5007,10 +5299,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_complet
 +  yield;
  }
  
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_consoleonpage.js
---- a/browser/devtools/webconsole/test/browser_webconsole_consoleonpage.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_consoleonpage.js	Wed May 09 22:02:52 2012 +0300
-@@ -14,17 +14,15 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_consoleonpage.js b/browser/devtools/webconsole/test/browser_webconsole_consoleonpage.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_consoleonpage.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_consoleonpage.js
+@@ -9,27 +9,25 @@
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-own-console.html";
+ 
  function test()
  {
    addTab(TEST_URI);
@@ -5033,7 +5330,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_console
    ok(hud, "WebConsole was opened");
  
    testOwnConsole();
-@@ -42,8 +40,8 @@
+ }
+ 
+ function testConsoleOnPage(console) {
+   isnot(console, undefined, "Console object defined on page");
+   is(console.foo, "bar", "Custom console is not overwritten");
+@@ -37,13 +35,13 @@ function testConsoleOnPage(console) {
+ 
+ function testOwnConsole()
+ {
+   let console = browser.contentWindow.wrappedJSObject.console;
+   // Test console on the page. There is already one so it shouldn't be
    // overwritten by the WebConsole's console.
    testConsoleOnPage(console);
  
@@ -5044,10 +5351,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_console
 +  ok(hud.console, "HUD console is defined");
    finishTest();
  }
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
---- a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js	Wed May 09 22:02:52 2012 +0300
-@@ -54,17 +54,27 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
+@@ -49,22 +49,32 @@ function test() {
+     openConsole(null, testExecutionScope);
+   }, true);
+ }
+ 
+ function testExecutionScope(hud) {
    let jsterm = hud.jsterm;
  
    jsterm.clearOutput();
@@ -5083,10 +5395,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_executi
 +  });
  }
  
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_for_of.js
---- a/browser/devtools/webconsole/test/browser_webconsole_for_of.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_for_of.js	Wed May 09 22:02:52 2012 +0300
-@@ -7,22 +7,29 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_for_of.js b/browser/devtools/webconsole/test/browser_webconsole_for_of.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_for_of.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_for_of.js
+@@ -2,27 +2,34 @@
+  * http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ // A for-of loop in Web Console code can loop over a content NodeList.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-for-of.html";
  
  function test() {
    addTab(TEST_URI);
@@ -5129,10 +5446,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_for_of.
 +    failureFn: finishTest,
 +  });
  }
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
---- a/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js	Wed May 09 22:02:52 2012 +0300
-@@ -45,38 +45,38 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js b/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
+@@ -40,43 +40,43 @@
+ 
+ // Tests that the correct CSS styles are applied to the lines of console
+ // output.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
  
  function test() {
    addTab(TEST_URI);
@@ -5193,10 +5515,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_js_inpu
 +  });
  }
  
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_jsterm.js
---- a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js	Wed May 09 22:02:52 2012 +0300
-@@ -41,21 +41,46 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+@@ -36,123 +36,193 @@
+  * and other provisions required by the GPL or the LGPL. If you do not delete
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
  
  const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
  
@@ -5249,7 +5576,9 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_jsterm.
  }
  
  function testJSTerm(hud)
-@@ -65,34 +90,52 @@
+ {
+   jsterm = hud.jsterm;
+ 
    jsterm.clearOutput();
    jsterm.execute("'id=' + $('header').getAttribute('id')");
    checkResult('"id=header"', "$() worked", 1);
@@ -5305,14 +5634,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_jsterm.
  
    jsterm.execute("help");
    output = jsterm.outputNode.querySelector(".webconsole-msg-output");
-@@ -102,57 +145,94 @@
+   ok(!output, "help worked");
+ 
+   jsterm.execute("?");
    output = jsterm.outputNode.querySelector(".webconsole-msg-output");
    ok(!output, "? worked");
  
 +  let foundTab = null;
 +  waitForSuccess({
 +    name: "help tab opened",
-+    timeout: 10000,
 +    validatorFn: function()
 +    {
 +      let newTabOpen = gBrowser.tabs.length == tabs + 1;
@@ -5320,17 +5650,8 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_jsterm.
 +        return false;
 +      }
 +
-+      foundTab = null;
-+      Array.some(gBrowser.tabs, function(tab) {
-+        let win = tab.linkedBrowser.contentWindow;
-+        let match = win.location.href.indexOf("developer.mozilla.org") > -1;
-+        if (match) {
-+          foundTab = tab;
-+        }
-+        return match;
-+      });
-+
-+      return foundTab;
++      foundTab = gBrowser.tabs[tabs];
++      return true;
 +    },
 +    successFn: function()
 +    {
@@ -5417,10 +5738,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_jsterm.
    executeSoon(finishTest);
 +  yield;
  }
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
---- a/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js	Wed May 09 22:02:52 2012 +0300
-@@ -58,17 +58,40 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js b/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
+@@ -53,22 +53,45 @@ function test() {
+ 
+ function testNullAndUndefinedOutput(hud) {
+   let jsterm = hud.jsterm;
+   let outputNode = jsterm.outputNode;
+ 
    jsterm.clearOutput();
    jsterm.execute("null;");
  
@@ -5470,10 +5796,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_null_an
 +  };
  }
  
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_output_order.js
---- a/browser/devtools/webconsole/test/browser_webconsole_output_order.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_output_order.js	Wed May 09 22:02:52 2012 +0300
-@@ -71,8 +71,7 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_order.js b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_order.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
+@@ -66,15 +66,14 @@ function testOutputOrder(hud) {
+     },
+     successFn: function()
+     {
+       let nodes = outputNode.querySelectorAll(".hud-msg-node");
+       let executedStringFirst =
          /console\.log\('foo', 'bar'\);/.test(nodes[0].textContent);
        let outputSecond = /foo bar/.test(nodes[2].textContent);
        ok(executedStringFirst && outputSecond, "executed string comes first");
@@ -5483,10 +5814,17 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_output_
        finishTest();
      },
      failureFn: finishTest,
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_property_panel.js
---- a/browser/devtools/webconsole/test/browser_webconsole_property_panel.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_property_panel.js	Wed May 09 22:02:52 2012 +0300
-@@ -41,56 +41,63 @@
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_panel.js b/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
+@@ -36,61 +36,68 @@
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
  // Tests the functionality of the "property panel", which allows JavaScript
  // objects and DOM nodes to be inspected.
  
@@ -5587,10 +5925,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_propert
 +  executeSoon(finishTest);
  }
  
-diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_property_provider.js
---- a/browser/devtools/webconsole/test/browser_webconsole_property_provider.js	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/devtools/webconsole/test/browser_webconsole_property_provider.js	Wed May 09 22:02:52 2012 +0300
-@@ -41,43 +41,37 @@
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_provider.js b/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
+@@ -36,48 +36,42 @@
+  * the provisions above, a recipient may use your version of this file under
+  * the terms of any one of the MPL, the GPL or the LGPL.
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
  // Tests the property provider, which is part of the code completion
  // infrastructure.
  
@@ -5645,10 +5988,15 @@ diff -r ffa6e0a7128f browser/devtools/webconsole/test/browser_webconsole_propert
    finishTest();
  }
  
-diff -r ffa6e0a7128f browser/locales/en-US/chrome/browser/devtools/webconsole.properties
---- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties	Thu Apr 26 23:06:34 2012 +0300
-+++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties	Wed May 09 22:02:52 2012 +0300
-@@ -187,3 +187,9 @@
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -182,8 +182,14 @@ timerStarted=%S: timer started
+ timeEnd=%1$S: %2$Sms
+ 
+ # LOCALIZATION NOTE (Autocomplete.blank):
+ # This string is used when inputnode string containing anchor doesn't
+ # doesn't matches to any property in the content.
  Autocomplete.blank=  <- no result
  
  maxTimersExceeded=The maximum allowed number of timers in this page was exceeded.
