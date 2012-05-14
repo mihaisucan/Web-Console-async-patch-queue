@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent a860faecb41f7553a470d82878547aa407acdb76
+# Parent 0559398fe897dbc9ff543abb08dd9e2bd5b1cace
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1336767343 -10800
+# Date 1337027350 -10800
 
 Bug 673148 - (async-webconsole) Part 4 - Make network logging async
 
@@ -204,7 +204,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
  
    /**
-@@ -1197,10 +1223,911 @@ let ConsoleListener = {
+@@ -1197,10 +1223,927 @@ let ConsoleListener = {
     * Remove the nsIConsoleService listener.
     */
    destroy: function CL_destroy()
@@ -369,6 +369,8 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +    this.httpActivity.stage = "REQUEST_STOP";
 +
++    dump("NRL_onStopRequest discardResponseBody " + this.httpActivity.discardResponseBody + " " + this.receivedData.length + "\n");
++
 +    if (!this.httpActivity.discardResponseBody) {
 +      let logResponse = this.httpActivity.log.entries[0].response;
 +      logResponse.content = {
@@ -526,7 +528,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +   * Disabled by
 +   * default to save memory.
 +   */
-+  saveRequestAndResponseBodies: false,
++  saveRequestAndResponseBodies: true,
 +
 +  openRequests: null,
 +  openResponses: null,
@@ -728,6 +730,9 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    httpActivity.stage = "REQUEST_HEADER"; // activity stage (aActivitySubtype)
 +    httpActivity.discardRequestBody = !this.saveRequestAndResponseBodies;
 +    httpActivity.discardResponseBody = !this.saveRequestAndResponseBodies;
++
++    dump("_onRequestHeader save bodies " + this.saveRequestAndResponseBodies + "\n");
++
 +    httpActivity.timings.REQUEST_HEADER = {
 +      first: aTimestamp,
 +      last: aTimestamp
@@ -873,11 +878,12 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +  _onRequestBodySent: function NM__onRequestBodySent(aHttpActivity)
 +  {
-+    dump("NM__onRequestBodySent\n");
-+
 +    if (aHttpActivity.discardRequestBody) {
 +      dump("NM__onRequestBodySent body discarded\n");
 +      return;
++    }
++    else {
++      dump("NM__onRequestBodySent saving it\n");
 +    }
 +
 +    let request = aHttpActivity.log.entries[0].request;
@@ -886,7 +892,14 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +                   readPostTextFromRequest(aHttpActivity.channel,
 +                                           aHttpActivity.charset);
 +
-+    if (!sentBody && request.url == JSTerm.window.location.href) {
++    if (sentBody) {
++      dump("sentBody1 " + sentBody.length + "\n");
++    }
++    else {
++      dump("sentBody1 empty\n");
++    }
++
++    if (!sentBody && request.url == Manager.window.location.href) {
 +      // If the request URL is the same as the current page url, then
 +      // we can try to get the posted text from the page directly.
 +      // This check is necessary as otherwise the
@@ -898,8 +911,11 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +                                                    aHttpActivity.charset);
 +    }
 +    if (!sentBody) {
++      dump("sentBody empty\n");
 +      return;
 +    }
++
++    dump("sentBody " + sentBody.length + "\n");
 +
 +    request.postData = {
 +      mimeType: "",
@@ -2859,7 +2875,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          hud.reattachConsole(aContentWindow);
        }
      }
-@@ -2884,17 +1505,17 @@ HeadsUpDisplay.prototype = {
+@@ -2879,17 +1500,17 @@ HeadsUpDisplay.prototype = {
     * Web Console content script.
     *
     * @private
@@ -2878,7 +2894,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    groupDepth: 0,
  
-@@ -3966,16 +2587,82 @@ HeadsUpDisplay.prototype = {
+@@ -3961,16 +2582,82 @@ HeadsUpDisplay.prototype = {
                                                aScriptError.lineNumber,
                                                null,
                                                null,
@@ -2961,7 +2977,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Setup the message manager used to communicate with the Web Console content
-@@ -3989,17 +2676,17 @@ HeadsUpDisplay.prototype = {
+@@ -3984,17 +2671,17 @@ HeadsUpDisplay.prototype = {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
      this._messageListeners.forEach(function(aName) {
@@ -2980,7 +2996,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Handler for all of the messages coming from the Web Console content script.
     *
-@@ -4032,16 +2719,19 @@ HeadsUpDisplay.prototype = {
+@@ -4027,16 +2714,19 @@ HeadsUpDisplay.prototype = {
          break;
        case "WebConsole:PageError":
          this.reportPageError(aMessage.json.pageError);
@@ -3000,7 +3016,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * now this method sends the web-console-created notification using the
     * nsIObserverService.
     *
-@@ -4108,16 +2798,66 @@ HeadsUpDisplay.prototype = {
+@@ -4103,16 +2793,66 @@ HeadsUpDisplay.prototype = {
          message: aMessage,
          callback: aCallback,
        };
@@ -3041,7 +3057,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +      let linkNode = messageNode.querySelector(".webconsole-msg-link");
 +      let statusNode = linkNode.querySelector(".webconsole-msg-status");
-+      statusNode.setAttribute("value", statusTest);
++      statusNode.setAttribute("value", statusText);
 +
 +      messageNode.clipboardText = [request.method, request.url, statusText]
 +                                  .join(" ");
@@ -3067,7 +3083,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @param function aCallback
     *        The function you want invoked when the user clicks on the message
     *        element.
-@@ -4168,16 +2908,17 @@ HeadsUpDisplay.prototype = {
+@@ -4163,16 +2903,17 @@ HeadsUpDisplay.prototype = {
      }
      if (this.gcliterm) {
        this.gcliterm.destroy();
@@ -3085,7 +3101,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.positionMenuitems.window.removeEventListener("command",
        this._positionConsoleWindow, false);
  
-@@ -6089,98 +4830,16 @@ CommandController.prototype = {
+@@ -6084,98 +4825,16 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
@@ -3425,7 +3441,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/NetworkPanel.jsm
-@@ -0,0 +1,703 @@
+@@ -0,0 +1,675 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -3582,29 +3598,27 @@ new file mode 100644
 +    let entry = this.httpActivity.log.entries[0];
 +    let request = entry.request;
 +    let response = entry.response;
-+    let contentTypeValue = null;
 +
-+    let mimeType = "";
++    let contentType = "";
 +    let types = response.contentType ?
 +                response.contentType.split(/,|;/) : [];
 +    for (let i = 0; i < types.length; i++) {
-+      let type = NetworkHelper.mimeCategoryMap[types[i]];
-+      if (type) {
-+        mimeType = types[i];
++      if (types[i] in NetworkHelper.mimeCategoryMap) {
++        contentType = types[i];
 +        break;
 +      }
 +    }
 +
-+    if (mimeType) {
-+      this._contentType = mimeType;
-+      return mimeType;
++    if (contentType) {
++      this._contentType = contentType;
++      return contentType;
 +    }
 +
 +    // Try to get the content type from the request file extension.
 +    let uri = NetUtil.newURI(request.url);
 +    if ((uri instanceof Ci.nsIURL) && uri.fileExtension) {
 +      try {
-+        mimeType = mimeService.getTypeFromExtension(uri.fileExtension);
++         contentType = mimeService.getTypeFromExtension(uri.fileExtension);
 +      }
 +      catch(ex) {
 +        // Added to prevent failures on OS X 64. No Flash?
@@ -3612,7 +3626,8 @@ new file mode 100644
 +      }
 +    }
 +
-+    return mimeType;
++    this._contentType = contentType;
++    return contentType;
 +  },
 +
 +  /**
@@ -3622,7 +3637,8 @@ new file mode 100644
 +   */
 +  get _responseIsImage()
 +  {
-+    return NetworkHelper.mimeCategoryMap[this._contentType] == "image";
++    return this.contentType &&
++           NetworkHelper.mimeCategoryMap[this.contentType] == "image";
 +  },
 +
 +  /**
@@ -3632,7 +3648,7 @@ new file mode 100644
 +   */
 +  get _isResponseBodyTextData()
 +  {
-+    let contentType = this._contentType;
++    let contentType = this.contentType;
 +
 +    if (!contentType)
 +      return false;
@@ -3664,7 +3680,7 @@ new file mode 100644
 +   */
 +  get _isResponseCached()
 +  {
-+    return this.httpActivity.response.status.indexOf("304") != -1;
++    return this.httpActivity.log.entries[0].response.status == 304;
 +  },
 +
 +  /**
@@ -3873,11 +3889,12 @@ new file mode 100644
 +   *
 +   * @returns void
 +   */
-+  _displayResponseImage: function NP_displayResponseImage()
++  _displayResponseImage: function NP__displayResponseImage()
 +  {
 +    let self = this;
-+    let timing = this.httpActivity.timing;
-+    let response = this.httpActivity.response;
++    let entry = this.httpActivity.log.entries[0];
++    let timing = entry.timings;
++    let request = entry.request;
 +    let cached = "";
 +
 +    if (this._isResponseCached) {
@@ -3885,17 +3902,15 @@ new file mode 100644
 +    }
 +
 +    let imageNode = this.document.getElementById("responseImage" + cached +"Node");
-+    imageNode.setAttribute("src", this.httpActivity.url);
++    imageNode.setAttribute("src", request.url);
 +
 +    // This function is called to set the imageInfo.
 +    function setImageInfo() {
-+      let deltaDuration =
-+        Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
 +      self._appendTextNode("responseImage" + cached + "Info",
-+        self._format("imageSizeDeltaDurationMS", [
-+          imageNode.width, imageNode.height, deltaDuration
-+        ]
-+      ));
++        self._format("imageSizeDeltaDurationMS",
++          [ imageNode.width, imageNode.height, timing.receive ]
++        )
++      );
 +    }
 +
 +    // Check if the image is already loaded.
@@ -3925,21 +3940,17 @@ new file mode 100644
 +   */
 +  _displayResponseBody: function NP_displayResponseBody(aCachedContent)
 +  {
-+    let timing = this.httpActivity.timing;
-+    let response = this.httpActivity.response;
-+    let cached =  "";
-+    if (aCachedContent) {
-+      cached = "Cached";
-+    }
++    let entry = this.httpActivity.log.entries[0];
++    let timing = entry.timings;
++    let response = entry.response;
++    let cached =  aCachedContent ? "Cached" : "";
 +
-+    let deltaDuration =
-+      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
 +    this._appendTextNode("responseBody" + cached + "Info",
-+      this._format("durationMS", [deltaDuration]));
++      this._format("durationMS", [timing.receive]));
 +
 +    this._displayNode("responseBody" + cached);
 +    this._appendTextNode("responseBody" + cached + "Content",
-+                            aCachedContent || response.body);
++                            aCachedContent || response.content.text);
 +  },
 +
 +  /**
@@ -3948,18 +3959,16 @@ new file mode 100644
 +   *
 +   * @returns void
 +   */
-+  _displayResponseBodyUnknownType: function NP_displayResponseBodyUnknownType()
++  _displayResponseBodyUnknownType: function NP__displayResponseBodyUnknownType()
 +  {
-+    let timing = this.httpActivity.timing;
++    let timing = this.httpActivity.log.entries[0].timings;
 +
 +    this._displayNode("responseBodyUnknownType");
-+    let deltaDuration =
-+      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
 +    this._appendTextNode("responseBodyUnknownTypeInfo",
-+      this._format("durationMS", [deltaDuration]));
++      this._format("durationMS", [timing.receive]));
 +
 +    this._appendTextNode("responseBodyUnknownTypeContent",
-+      this._format("responseBodyUnableToDisplay.content", [this._contentType]));
++      this._format("responseBodyUnableToDisplay.content", [this.contentType]));
 +  },
 +
 +  /**
@@ -3970,13 +3979,11 @@ new file mode 100644
 +   */
 +  _displayNoResponseBody: function NP_displayNoResponseBody()
 +  {
-+    let timing = this.httpActivity.timing;
++    let timing = this.httpActivity.log.entries[0].timings;
 +
 +    this._displayNode("responseNoBody");
-+    let deltaDuration =
-+      Math.round((timing.RESPONSE_COMPLETE - timing.RESPONSE_HEADER) / 1000);
 +    this._appendTextNode("responseNoBodyInfo",
-+      this._format("durationMS", [deltaDuration]));
++      this._format("durationMS", [timing.receive]));
 +  },
 +
 +  /*
@@ -4039,11 +4046,13 @@ new file mode 100644
 +        // FALL THROUGH
 +
 +      case this._DISPLAYED_RESPONSE_HEADER:
++        dump("NetworkPanel update _DISPLAYED_RESPONSE_HEADER\n");
 +        if (this.httpActivity.stage != "REQUEST_STOP") {
 +          break;
 +        }
 +
 +        if (!response.content) {
++          this._displayNoResponseBody();
 +          this._callIsDone();
 +        }
 +        else if (this._responseIsImage) {
@@ -4054,34 +4063,13 @@ new file mode 100644
 +          this._displayResponseBodyUnknownType();
 +          this._callIsDone();
 +        }
-+        else if (response.body) {
++        else if (response.content) {
 +          this._displayResponseBody();
-+          this._callIsDone();
-+        }
-+        else if (this._isResponseCached) {
-+          let self = this;
-+          NetworkHelper.loadFromCache(this.httpActivity.url,
-+                                      this.httpActivity.charset,
-+                                      function(aContent) {
-+            // If some content could be loaded from the cache, then display
-+            // the body.
-+            if (aContent) {
-+              self._displayResponseBody(aContent);
-+              self._callIsDone();
-+            }
-+            // Otherwise, show the "There is no response body" hint.
-+            else {
-+              self._displayNoResponseBody();
-+              self._callIsDone();
-+            }
-+          });
-+        }
-+        else {
-+          this._displayNoResponseBody();
 +          this._callIsDone();
 +        }
 +
 +        this._state = this._TRANSITION_CLOSED;
++        dump("NetworkPanel update end\n");
 +        break;
 +    }
 +  }
