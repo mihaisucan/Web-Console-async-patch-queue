@@ -1,14 +1,14 @@
 # HG changeset patch
 # Parent 0559398fe897dbc9ff543abb08dd9e2bd5b1cace
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1337027350 -10800
+# Date 1337111149 -10800
 
 Bug 673148 - (async-webconsole) Part 4 - Make network logging async
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -12,25 +12,31 @@ let Cc = Components.classes;
+@@ -12,39 +12,47 @@ let Cc = Components.classes;
  let Ci = Components.interfaces;
  let Cu = Components.utils;
  
@@ -40,7 +40,87 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
  let Manager = {
    get window() content,
    sandbox: null,
-@@ -232,19 +238,21 @@ let Manager = {
+   hudId: null,
+   _sequence: 0,
+   _messageListeners: ["WebConsole:Init", "WebConsole:EnableFeature",
+-                      "WebConsole:DisableFeature", "WebConsole:Destroy"],
++                      "WebConsole:DisableFeature", "WebConsole:SetPreferences",
++                      "WebConsole:GetPreferences", "WebConsole:Destroy"],
+   _messageHandlers: null,
+   _enabledFeatures: null,
++  _prefs: { },
+ 
+   /**
+    * Getter for a unique ID for the current Web Console content instance.
+    */
+   get sequenceId() "HUDContent-" + (++this._sequence),
+ 
+   /**
+    * Initialize the Web Console manager.
+@@ -97,16 +105,22 @@ let Manager = {
+         this._onInit(aMessage.json);
+         break;
+       case "WebConsole:EnableFeature":
+         this.enableFeature(aMessage.json.feature, aMessage.json);
+         break;
+       case "WebConsole:DisableFeature":
+         this.disableFeature(aMessage.json.feature);
+         break;
++      case "WebConsole:GetPreferences":
++        this.handleGetPreferences(aMessage.json);
++        break;
++      case "WebConsole:SetPreferences":
++        this.handleSetPreferences(aMessage.json);
++        break;
+       case "WebConsole:Destroy":
+         this.destroy();
+         break;
+       default: {
+         let handler = this._messageHandlers[aMessage.name];
+         handler && handler(aMessage.json);
+         break;
+       }
+@@ -137,31 +151,39 @@ let Manager = {
+    *        The object received from the remote process. The WebConsole:Init
+    *        message properties:
+    *        - hudId - (required) the remote Web Console instance ID.
+    *        - features - (optional) array of features you want to enable from
+    *        the start. For each feature you enable you can pass feature-specific
+    *        options in a property on the JSON object you send with the same name
+    *        as the feature. See this.enableFeature() for the list of available
+    *        features.
++   *        - preferences - (optional) an object of preferences you want to set.
++   *        Use keys for preference names and values for preference values.
+    *        - cachedMessages - (optional) an array of cached messages you want
+    *        to receive. See this._sendCachedMessages() for the list of available
+    *        message types.
+    *
+    *        Example message:
+    *        {
+    *          hudId: "foo1",
+    *          features: ["JSTerm", "ConsoleAPI"],
+    *          ConsoleAPI: { ... }, // ConsoleAPI-specific options
+    *          cachedMessages: ["ConsoleAPI"],
++   *          preferences: {"foo.bar": true},
+    *        }
+    */
+   _onInit: function Manager_onInit(aMessage)
+   {
+     this.hudId = aMessage.hudId;
++
++    if (aMessage.preferences) {
++      this.handleSetPreferences({ preferences: aMessage.preferences });
++    }
++
+     if (aMessage.features) {
+       aMessage.features.forEach(function(aFeature) {
+         this.enableFeature(aFeature, aMessage[aFeature]);
+       }, this);
+     }
+ 
+     if (aMessage.cachedMessages) {
+       this._sendCachedMessages(aMessage.cachedMessages);
+@@ -232,19 +254,21 @@ let Manager = {
     * you enable.
     *
     * Supported features:
@@ -63,7 +143,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    {
      if (this._enabledFeatures.indexOf(aFeature) != -1) {
        return;
-@@ -255,16 +263,19 @@ let Manager = {
+@@ -255,16 +279,19 @@ let Manager = {
          JSTerm.init(aMessage);
          break;
        case "ConsoleAPI":
@@ -83,7 +163,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
      this._enabledFeatures.push(aFeature);
    },
  
-@@ -289,16 +300,19 @@ let Manager = {
+@@ -289,23 +316,98 @@ let Manager = {
          JSTerm.destroy();
          break;
        case "ConsoleAPI":
@@ -102,13 +182,104 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    },
  
    /**
++   * Handle the "WebConsole:GetPreferences" messages from the remote Web Console
++   * instance.
++   *
++   * @param object aMessage
++   *        The JSON object of the remote message. This object holds one
++   *        property: preferences. The |preferences| value must be an array of
++   *        preference names you want to retrieve the values for.
++   *        A "WebConsole:Preferences" message is sent back to the remote Web
++   *        Console instance. The message holds a |preferences| object which has
++   *        key names for preference names and values for each preference value.
++   */
++  handleGetPreferences: function Manager_handleGetPreferences(aMessage)
++  {
++    dump("handleGetPreferences " + aMessage.preferences + "\n");
++
++    let prefs = {};
++    aMessage.preferences.forEach(function(aName) {
++      prefs[aName] = this.getPreference(aName);
++    }, this);
++
++    this.sendMessage("WebConsole:Preferences", {preferences: prefs});
++  },
++
++  /**
++   * Handle the "WebConsole:SetPreferences" messages from the remote Web Console
++   * instance.
++   *
++   * @param object aMessage
++   *        The JSON object of the remote message. This object holds one
++   *        property: preferences. The |preferences| value must be an object of
++   *        preference names as keys and preference values as object values, for
++   *        each preference you want to change.
++   */
++  handleSetPreferences: function Manager_handleSetPreferences(aMessage)
++  {
++    dump("handleSetPreferences " + Object.keys(aMessage.preferences) + "\n");
++
++    for (let key in aMessage.preferences) {
++      this.setPreference(key, aMessage.preferences[key]);
++    }
++  },
++
++  /**
++   * Retrieve a preference.
++   *
++   * @param string aName
++   *        Preference name.
++   * @return mixed|null
++   *         Preference value. Null is returned if the preference does not
++   *         exist.
++   */
++  getPreference: function Manager_getPreference(aName)
++  {
++    dump("getPreference " + aName + " " + this._prefs[aName] + "\n");
++    return aName in this._prefs ? this._prefs[aName] : null;
++  },
++
++  /**
++   * Set a preference to a new value.
++   *
++   * @param string aName
++   *        Preference name.
++   * @param mixed aValue
++   *        Preference value.
++   */
++  setPreference: function Manager_setPreference(aName, aValue)
++  {
++    dump("setPreference " + aName + " " + aValue + "\n");
++    this._prefs[aName] = aValue;
++  },
++
++  /**
     * Send the cached messages to the remote Web Console instance.
-@@ -389,16 +403,20 @@ let Manager = {
+    *
+    * @private
+    * @param array aMessageTypes
+    *        An array that lists which kinds of messages you want. Supported
+    *        message types: "ConsoleAPI" and "PageError".
+    */
+   _sendCachedMessages: function Manager__sendCachedMessages(aMessageTypes)
+@@ -383,22 +485,30 @@ let Manager = {
+     this._messageListeners.forEach(function(aName) {
+       removeMessageListener(aName, this);
+     }, this);
+ 
+     this._enabledFeatures.slice().forEach(this.disableFeature, this);
+ 
      this.hudId = null;
      this._messageHandlers = null;
-     Manager = ConsoleAPIObserver = JSTerm = ConsoleListener = null;
+-    Manager = ConsoleAPIObserver = JSTerm = ConsoleListener = null;
++
++    Manager = ConsoleAPIObserver = JSTerm = ConsoleListener = NetworkMonitor =
++      NetworkResponseListener = ConsoleProgressListener = null;
++
      Cc = Ci = Cu = XPCOMUtils = Services = gConsoleStorage =
-       WebConsoleUtils = l10n = null;
+-      WebConsoleUtils = l10n = null;
++      WebConsoleUtils = l10n = JSPropertyProvider = NetworkHelper =
++      NetUtil = activityDistributor = null;
    },
  };
  
@@ -124,7 +295,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
   *
   * A list of helper functions used by Firebug can be found here:
   *   http://getfirebug.com/wiki/index.php/Command_Line_API
-@@ -550,17 +568,17 @@ function JSTermHelper(aJSTerm)
+@@ -550,17 +660,17 @@ function JSTermHelper(aJSTerm)
      if (!WebConsoleUtils.isObjectInspectable(aObject)) {
        return aObject;
      }
@@ -143,7 +314,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
  
      Manager.sendMessage("JSTerm:InspectObject", message);
    };
-@@ -611,17 +629,17 @@ function JSTermHelper(aJSTerm)
+@@ -611,17 +721,17 @@ function JSTermHelper(aJSTerm)
    };
  }
  
@@ -162,7 +333,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    sandbox: null,
  
    _messageHandlers: {},
-@@ -917,16 +935,20 @@ let JSTerm = {
+@@ -917,16 +1027,20 @@ let JSTerm = {
      }
  
      delete this.sandbox;
@@ -183,7 +354,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
  
    /**
-@@ -1106,16 +1128,20 @@ let ConsoleAPIObserver = {
+@@ -1106,16 +1220,20 @@ let ConsoleAPIObserver = {
     */
    destroy: function CAO_destroy()
    {
@@ -204,7 +375,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
  
    /**
-@@ -1197,10 +1223,927 @@ let ConsoleListener = {
+@@ -1197,10 +1315,897 @@ let ConsoleListener = {
     * Remove the nsIConsoleService listener.
     */
    destroy: function CL_destroy()
@@ -324,7 +495,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    this._findOpenResponse();
 +    let data = NetUtil.readInputStreamToString(aInputStream, aCount);
 +
-+    if (!this.httpActivity.discardResponseBody &&
++    if (!this.httpActivity.meta.discardResponseBody &&
 +        this.receivedData.length < RESPONSE_BODY_LIMIT) {
 +      this.receivedData += NetworkHelper.
 +                           convertToUnicode(data, aRequest.contentCharset);
@@ -367,23 +538,6 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +    this._findOpenResponse();
 +
-+    this.httpActivity.stage = "REQUEST_STOP";
-+
-+    dump("NRL_onStopRequest discardResponseBody " + this.httpActivity.discardResponseBody + " " + this.receivedData.length + "\n");
-+
-+    if (!this.httpActivity.discardResponseBody) {
-+      let logResponse = this.httpActivity.log.entries[0].response;
-+      logResponse.content = {
-+        size: this.receivedData.length,
-+        mimeType: logResponse.contentType,
-+        text: this.receivedData,
-+      };
-+    }
-+
-+    this.receivedData = "";
-+
-+    NetworkMonitor.sendActivity(this.httpActivity);
-+
 +    this.sink.outputStream.close();
 +  },
 +
@@ -424,7 +578,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +    delete NetworkMonitor.openResponses[openResponse.id];
 +
-+    this.httpActivity.stage = "http-on-examine-response";
++    this.httpActivity.meta.stages.push("http-on-examine-response");
 +    NetworkMonitor.sendActivity(this.httpActivity);
 +  },
 +
@@ -447,11 +601,23 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +    this._findOpenResponse();
 +
-+    /* FIXME: need to see what we do with the network tests
-+    if (HUDService.lastFinishedRequestCallback) {
-+      HUDService.lastFinishedRequestCallback(this.httpActivity);
++    this.httpActivity.meta.stages.push("REQUEST_STOP");
++
++    dump("NRL_onStreamClose discardResponseBody " + this.httpActivity.meta.discardResponseBody + " " + this.receivedData.length + "\n");
++
++    if (!this.httpActivity.meta.discardResponseBody &&
++        this.receivedData.length) {
++      let logResponse = this.httpActivity.log.entries[0].response;
++      logResponse.content = {
++        size: this.receivedData.length,
++        mimeType: logResponse.contentType,
++        text: this.receivedData,
++      };
 +    }
-+    */
++
++    this.receivedData = "";
++
++    NetworkMonitor.sendActivity(this.httpActivity);
 +
 +    this.httpActivity.channel = null;
 +    this.httpActivity = null;
@@ -524,16 +690,18 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +  responsePipeSegmentSize: null,
 +
 +  /**
-+   * FIXME: Whether to save the bodies of network requests and responses.  
-+   * Disabled by
++   * Whether to save the bodies of network requests and responses. Disabled by
 +   * default to save memory.
 +   */
-+  saveRequestAndResponseBodies: true,
++  get saveRequestAndResponseBodies() {
++    return Manager.getPreference("NetworkMonitor.saveRequestAndResponseBodies");
++  },
 +
 +  openRequests: null,
 +  openResponses: null,
++  progressListener: null,
 +
-+  init: function NM_init()
++  init: function NM_init(aMessage)
 +  {
 +    this.responsePipeSegmentSize = Services.prefs
 +                                   .getIntPref("network.buffer.cache.size");
@@ -546,12 +714,12 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    Services.obs.addObserver(this.httpResponseExaminer,
 +                             "http-on-examine-response", false);
 +
-+    /* FIXME
-+    let browser = this.tab.linkedBrowser;
-+    this.progressListener = new ConsoleProgressListener(this.hudId);
-+    browser.webProgress.addProgressListener(this.progressListener,
-+      Ci.nsIWebProgress.NOTIFY_STATE_ALL);
-+    */
++    if (aMessage && aMessage.monitorFileActivity) {
++      let webProgress = docShell.QueryInterface(Ci.nsIWebProgress);
++      this.progressListener = new ConsoleProgressListener();
++      webProgress.addProgressListener(this.progressListener,
++        Ci.nsIWebProgress.NOTIFY_STATE_ALL);
++    }
 +  },
 +
 +  /**
@@ -645,7 +813,8 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +  function NM_observeActivity(aChannel, aActivityType, aActivitySubtype,
 +                              aTimestamp, aExtraSizeData, aExtraStringData)
 +  {
-+    if (aActivityType != activityDistributor.ACTIVITY_TYPE_HTTP_TRANSACTION &&
++    if (!_alive ||
++        aActivityType != activityDistributor.ACTIVITY_TYPE_HTTP_TRANSACTION &&
 +        aActivityType != activityDistributor.ACTIVITY_TYPE_SOCKET_TRANSPORT) {
 +      dump("observeActivity type unknown\n");
 +      return;
@@ -685,13 +854,14 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +    // Store the time information for this activity subtype.
 +    if (aActivitySubtype in transCodes) {
-+      httpActivity.stage = transCodes[aActivitySubtype];
-+      dump("timings " + httpActivity.stage + " " + aTimestamp + "\n");
-+      if (httpActivity.stage in httpActivity.timings) {
-+        httpActivity.timings[httpActivity.stage].last = aTimestamp;
++      let stage = transCodes[aActivitySubtype];
++      dump("timings " + stage + " " + aTimestamp + "\n");
++      if (stage in httpActivity.timings) {
++        httpActivity.timings[stage].last = aTimestamp;
 +      }
 +      else {
-+        httpActivity.timings[httpActivity.stage] = {
++        httpActivity.meta.stages.push(stage);
++        httpActivity.timings[stage] = {
 +          first: aTimestamp,
 +          last: aTimestamp,
 +        };
@@ -727,9 +897,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +    let httpActivity = this._createActivityObject(aChannel);
 +    httpActivity.charset = win.document.characterSet; // see NM__onRequestBodySent()
-+    httpActivity.stage = "REQUEST_HEADER"; // activity stage (aActivitySubtype)
-+    httpActivity.discardRequestBody = !this.saveRequestAndResponseBodies;
-+    httpActivity.discardResponseBody = !this.saveRequestAndResponseBodies;
++    httpActivity.meta.stages.push("REQUEST_HEADER"); // activity stage (aActivitySubtype)
 +
 +    dump("_onRequestHeader save bodies " + this.saveRequestAndResponseBodies + "\n");
 +
@@ -798,7 +966,11 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +      id: Manager.sequenceId,
 +      channel: aChannel,
 +      charset: null, // see NM__onRequestHeader()
-+      stage: null, // activity stage (aActivitySubtype)
++      meta: { // holds metadata about the activity object
++        stages: [], // activity stages (aActivitySubtype)
++        discardRequestBody: !this.saveRequestAndResponseBodies,
++        discardResponseBody: !this.saveRequestAndResponseBodies,
++      },
 +      timings: {}, // internal timing information
 +      log: { // HAR object
 +        version: "1.2",
@@ -869,16 +1041,16 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +  sendActivity: function NM_sendActivity(aHttpActivity)
 +  {
-+    dump("NM_sendActivity " + aHttpActivity.stage + "\n");
++    dump("NM_sendActivity " + aHttpActivity.meta.stages + "\n");
 +    Manager.sendMessage("WebConsole:NetworkActivity", {
-+      stage: aHttpActivity.stage,
++      meta: aHttpActivity.meta,
 +      log: aHttpActivity.log,
 +    });
 +  },
 +
 +  _onRequestBodySent: function NM__onRequestBodySent(aHttpActivity)
 +  {
-+    if (aHttpActivity.discardRequestBody) {
++    if (aHttpActivity.meta.discardRequestBody) {
 +      dump("NM__onRequestBodySent body discarded\n");
 +      return;
 +    }
@@ -958,12 +1130,13 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    response.headersSize = aExtraStringData.length;
 +
 +    // Discard the response body for known response statuses.
-+    switch (response.status) {
++    switch (parseInt(response.status)) {
 +      case HTTP_MOVED_PERMANENTLY:
 +      case HTTP_FOUND:
 +      case HTTP_SEE_OTHER:
 +      case HTTP_TEMPORARY_REDIRECT:
-+        aHttpActivity.discardResponseBody = true;
++        aHttpActivity.meta.discardResponseBody = true;
++        dump("NM__onResponseHeader discardResponseBody\n");
 +        break;
 +    }
 +
@@ -1004,10 +1177,13 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +                           timings.REQUEST_HEADER.first;
 +    }
 +
-+    harTimings.send = (timings.STATUS_WAITING_FOR || timings.STATUS_RECEIVING_FROM).first -
-+                      (timings.STATUS_CONNECTED_TO || timings.STATUS_SENDING_TO).last;
++    harTimings.send = (timings.STATUS_WAITING_FOR ||
++                       timings.STATUS_RECEIVING_FROM).first -
++                      (timings.STATUS_CONNECTED_TO ||
++                       timings.STATUS_SENDING_TO).last;
 +    harTimings.wait = timings.RESPONSE_START.first -
-+                      (timings.REQUEST_BODY_SENT || timings.STATUS_SENDING_TO).last;
++                      (timings.REQUEST_BODY_SENT ||
++                       timings.STATUS_SENDING_TO).last;
 +    harTimings.receive = timings.RESPONSE_COMPLETE.last -
 +                         timings.RESPONSE_START.first;
 +
@@ -1041,27 +1217,25 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +    activityDistributor.removeObserver(this);
 +
-+    this.openRequests = {};
++    if (this.progressListener) {
++      let webProgress = docShell.QueryInterface(Ci.nsIWebProgress);
++      webProgress.removeProgressListener(this.progressListener);
++      delete this.progressListener;
++    }
 +
-+    //FIXME
-+    //browser.webProgress.removeProgressListener(hud.progressListener);
++    delete this.openRequests;
++    delete this.openResponses;
 +  },
 +};
 +
 +/**
-+ * A WebProgressListener that listens for location changes, to update HUDService
-+ * state information on page navigation.
++ * A WebProgressListener that listens for location changes. This progress
++ * listener is used to track file loads.
 + *
 + * @constructor
-+ * @param string aHudId
-+ *        The HeadsUpDisplay ID.
 + */
-+function ConsoleProgressListener(aHudId)
-+{
-+  this.hudId = aHudId;
-+}
++function ConsoleProgressListener() { }
 +
-+// TODO: update for e10s
 +ConsoleProgressListener.prototype = {
 +  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
 +                                         Ci.nsISupportsWeakReference]),
@@ -1069,7 +1243,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +  onStateChange: function CPL_onStateChange(aProgress, aRequest, aState,
 +                                            aStatus)
 +  {
-+    if (!(aState & Ci.nsIWebProgressListener.STATE_START)) {
++    if (!_alive || !(aState & Ci.nsIWebProgressListener.STATE_START)) {
 +      return;
 +    }
 +
@@ -1087,41 +1261,8 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +      return;
 +    }
 +
-+    let outputNode = HUDService.hudReferences[this.hudId].outputNode;
-+
-+    let chromeDocument = outputNode.ownerDocument;
-+    let msgNode = chromeDocument.createElementNS(HTML_NS, "html:span");
-+
-+    // Create the clickable URL part of the message.
-+    let linkNode = chromeDocument.createElementNS(HTML_NS, "html:span");
-+    linkNode.appendChild(chromeDocument.createTextNode(uri.spec));
-+    linkNode.classList.add("hud-clickable");
-+    linkNode.classList.add("webconsole-msg-url");
-+
-+    linkNode.addEventListener("mousedown", function(aEvent) {
-+      this._startX = aEvent.clientX;
-+      this._startY = aEvent.clientY;
-+    }, false);
-+
-+    linkNode.addEventListener("click", function(aEvent) {
-+      if (aEvent.detail == 1 && aEvent.button == 0 &&
-+          this._startX == aEvent.clientX && this._startY == aEvent.clientY) {
-+        let viewSourceUtils = chromeDocument.defaultView.gViewSourceUtils;
-+        viewSourceUtils.viewSource(uri.spec, null, chromeDocument);
-+      }
-+    }, false);
-+
-+    msgNode.appendChild(linkNode);
-+
-+    let messageNode = ConsoleUtils.createMessageNode(chromeDocument,
-+                                                     CATEGORY_NETWORK,
-+                                                     SEVERITY_LOG,
-+                                                     msgNode,
-+                                                     null,
-+                                                     null,
-+                                                     uri.spec);
-+
-+    ConsoleUtils.outputMessageNode(messageNode, this.hudId);
++    dump("CPL_onStateChange " + uri.spec + "\n");
++    Manager.sendMessage("WebConsole:FileActivity", {uri: uri.spec});
 +  },
 +
 +  onLocationChange: function() {},
@@ -2875,7 +3016,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          hud.reattachConsole(aContentWindow);
        }
      }
-@@ -2879,17 +1500,17 @@ HeadsUpDisplay.prototype = {
+@@ -2879,25 +1500,54 @@ HeadsUpDisplay.prototype = {
     * Web Console content script.
     *
     * @private
@@ -2885,7 +3026,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      "WebConsole:CachedMessages", "WebConsole:PageError", "JSTerm:EvalResult",
      "JSTerm:AutocompleteProperties", "JSTerm:ClearOutput",
 -    "JSTerm:InspectObject"],
-+    "JSTerm:InspectObject", "WebConsole:NetworkActivity"],
++    "JSTerm:InspectObject", "WebConsole:NetworkActivity",
++    "WebConsole:FileActivity"],
  
    consolePanel: null,
  
@@ -2894,7 +3036,74 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    groupDepth: 0,
  
-@@ -3961,16 +2582,82 @@ HeadsUpDisplay.prototype = {
++  _saveRequestAndResponseBodies: false,
++
++  /**
++   * Tells whether to save the bodies of network requests and responses.
++   * Disabled by default to save memory.
++   * @type boolean
++   */
++  get saveRequestAndResponseBodies() this._saveRequestAndResponseBodies,
++
++  /**
++   * Setter for saving of network request and response bodies.
++   *
++   * @param boolean aValue
++   *        The new value you want to set.
++   */
++  set saveRequestAndResponseBodies(aValue) {
++    this._saveRequestAndResponseBodies = aValue;
++
++    let message = {
++      preferences: {
++        "NetworkMonitor.saveRequestAndResponseBodies":
++          this._saveRequestAndResponseBodies,
++      },
++    };
++
++    this.sendMessageToContent("WebConsole:SetPreferences", message);
++  },
++
+   get mainPopupSet()
+   {
+     return this.chromeDocument.getElementById("mainPopupSet");
+   },
+ 
+   /**
+    * Get the tab associated to the HeadsUpDisplay object.
+    */
+@@ -3558,27 +2208,27 @@ HeadsUpDisplay.prototype = {
+    *        The console output DOM node.
+    * @returns void
+    */
+   createConsoleMenu: function HUD_createConsoleMenu(aConsoleWrapper) {
+     let menuPopup = this.makeXULNode("menupopup");
+     let id = this.hudId + "-output-contextmenu";
+     menuPopup.setAttribute("id", id);
+     menuPopup.addEventListener("popupshowing", function() {
+-      saveBodiesItem.setAttribute("checked",
+-        HUDService.saveRequestAndResponseBodies);
+-    }, true);
++      saveBodiesItem.setAttribute("checked", this.saveRequestAndResponseBodies);
++    }.bind(this), true);
+ 
+     let saveBodiesItem = this.makeXULNode("menuitem");
+     saveBodiesItem.setAttribute("label", l10n.getStr("saveBodies.label"));
+     saveBodiesItem.setAttribute("accesskey",
+                                  l10n.getStr("saveBodies.accesskey"));
+     saveBodiesItem.setAttribute("type", "checkbox");
+     saveBodiesItem.setAttribute("buttonType", "saveBodies");
+     saveBodiesItem.setAttribute("oncommand", "HUDConsoleUI.command(this);");
++    saveBodiesItem.setAttribute("hudId", this.hudId);
+     menuPopup.appendChild(saveBodiesItem);
+ 
+     menuPopup.appendChild(this.makeXULNode("menuseparator"));
+ 
+     let copyItem = this.makeXULNode("menuitem");
+     copyItem.setAttribute("label", l10n.getStr("copyCmd.label"));
+     copyItem.setAttribute("accesskey", l10n.getStr("copyCmd.accesskey"));
+     copyItem.setAttribute("key", "key_copy");
+@@ -3961,16 +2611,112 @@ HeadsUpDisplay.prototype = {
                                                aScriptError.lineNumber,
                                                null,
                                                null,
@@ -2969,6 +3178,36 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    ConsoleUtils.outputMessageNode(messageNode, this.hudId);
 +  },
 +
++  logFileActivity: function HUD_logFileActivity(aFileURI)
++  {
++    dump("HUD_logFileActivity " + aFileURI + "\n");
++    let chromeDocument = this.chromeDocument;
++
++    let urlNode = chromeDocument.createElementNS(XUL_NS, "label");
++    urlNode.setAttribute("crop", "center");
++    urlNode.setAttribute("flex", "1");
++    urlNode.setAttribute("title", aFileURI);
++    urlNode.setAttribute("value", aFileURI);
++    urlNode.classList.add("hud-clickable");
++    urlNode.classList.add("webconsole-msg-url");
++
++    let outputNode = ConsoleUtils.createMessageNode(chromeDocument,
++                                                    CATEGORY_NETWORK,
++                                                    SEVERITY_LOG,
++                                                    urlNode,
++                                                    this.hudId,
++                                                    null,
++                                                    null,
++                                                    aFileURI);
++
++    this.makeOutputMessageLink(outputNode, function HUD__onFileClick() {
++      let viewSourceUtils = chromeDocument.defaultView.gViewSourceUtils;
++      viewSourceUtils.viewSource(aFileURI, null, chromeDocument);
++    });
++
++    ConsoleUtils.outputMessageNode(outputNode, this.hudId);
++  },
++
    ERRORS: {
      HUD_BOX_DOES_NOT_EXIST: "Heads Up Display does not exist",
      TAB_ID_REQUIRED: "Tab DOM ID is required",
@@ -2977,7 +3216,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Setup the message manager used to communicate with the Web Console content
-@@ -3984,17 +2671,17 @@ HeadsUpDisplay.prototype = {
+@@ -3983,19 +2729,23 @@ HeadsUpDisplay.prototype = {
+   {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
      this._messageListeners.forEach(function(aName) {
@@ -2985,10 +3225,15 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }, this);
  
      let message = {
-       hudId: this.hudId,
+-      hudId: this.hudId,
 -      features: ["ConsoleAPI", "JSTerm", "PageError"],
 +      features: ["ConsoleAPI", "JSTerm", "PageError", "NetworkMonitor"],
        cachedMessages: ["ConsoleAPI", "PageError"],
++      NetworkMonitor: { monitorFileActivity: true },
++      preferences: {
++        "NetworkMonitor.saveRequestAndResponseBodies":
++          this.saveRequestAndResponseBodies,
++      },
      };
      this.sendMessageToContent("WebConsole:Init", message);
    },
@@ -2996,7 +3241,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Handler for all of the messages coming from the Web Console content script.
     *
-@@ -4027,16 +2714,19 @@ HeadsUpDisplay.prototype = {
+    * @private
+@@ -4027,16 +2777,22 @@ HeadsUpDisplay.prototype = {
          break;
        case "WebConsole:PageError":
          this.reportPageError(aMessage.json.pageError);
@@ -3008,6 +3254,9 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      case "WebConsole:NetworkActivity":
 +        this.handleNetworkActivity(aMessage.json);
 +        break;
++      case "WebConsole:FileActivity":
++        this.logFileActivity(aMessage.json.uri);
++        break;
      }
    },
  
@@ -3016,7 +3265,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * now this method sends the web-console-created notification using the
     * nsIObserverService.
     *
-@@ -4103,16 +2793,66 @@ HeadsUpDisplay.prototype = {
+@@ -4103,30 +2859,80 @@ HeadsUpDisplay.prototype = {
          message: aMessage,
          callback: aCallback,
        };
@@ -3028,8 +3277,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +  // TODO: add a comment.
 +  handleNetworkActivity: function HUD_handleNetworkActivity(aMessage)
 +  {
-+    let stage = aMessage.stage;
-+    dump("HUD_handleNetworkActivity stage " + stage + "\n");
++    let stage = aMessage.meta.stages[aMessage.meta.stages.length - 1];
++    dump("HUD_handleNetworkActivity stage " + stage + " stages " + aMessage.meta.stages + "\n");
 +
 +    if (stage == "REQUEST_HEADER") {
 +      this.logNetActivity(aMessage);
@@ -3083,7 +3332,22 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @param function aCallback
     *        The function you want invoked when the user clicks on the message
     *        element.
-@@ -4163,16 +2903,17 @@ HeadsUpDisplay.prototype = {
+    */
+   makeOutputMessageLink: function HUD_makeOutputMessageLink(aNode, aCallback)
+   {
+     let linkNode;
+     if (aNode.category === CATEGORY_NETWORK) {
+-      linkNode = aNode.querySelector(".webconsole-msg-link");
++      linkNode = aNode.querySelector(".webconsole-msg-link, .webconsole-msg-url");
+     }
+     else {
+       linkNode = aNode.querySelector(".webconsole-msg-body");
+       linkNode.classList.add("hud-clickable");
+     }
+ 
+     linkNode.setAttribute("aria-haspopup", "true");
+ 
+@@ -4163,16 +2969,17 @@ HeadsUpDisplay.prototype = {
      }
      if (this.gcliterm) {
        this.gcliterm.destroy();
@@ -3101,7 +3365,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.positionMenuitems.window.removeEventListener("command",
        this._positionConsoleWindow, false);
  
-@@ -6084,98 +4825,16 @@ CommandController.prototype = {
+@@ -5957,17 +4764,17 @@ HeadsUpDisplayUICommands = {
+         break;
+       }
+       case "selectAll": {
+         HUDService.hudReferences[hudId].outputNode.selectAll();
+         break;
+       }
+       case "saveBodies": {
+         let checked = aButton.getAttribute("checked") === "true";
+-        HUDService.saveRequestAndResponseBodies = checked;
++        HUDService.hudReferences[hudId].saveRequestAndResponseBodies = checked;
+         break;
+       }
+     }
+   },
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // WebConsoleObserver
+@@ -6084,98 +4891,16 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
@@ -3441,7 +3724,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/NetworkPanel.jsm
-@@ -0,0 +1,675 @@
+@@ -0,0 +1,690 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -3690,7 +3973,7 @@ new file mode 100644
 +   */
 +  get _isRequestBodyFormData()
 +  {
-+    let requestBody = this.httpActivity.request.body;
++    let requestBody = this.httpActivity.log.entries[0].request.postData.text;
 +    return this._fromDataRegExp.test(requestBody);
 +  },
 +
@@ -3719,6 +4002,7 @@ new file mode 100644
 +   *        If true, the key-value named "Cookie" is not added to the list.
 +   * @returns void
 +   */
++  // TODO: update comment
 +  _appendList: function NP_appendList(aParentId, aList, aIgnoreCookie)
 +  {
 +    let parent = this.document.getElementById(aParentId);
@@ -3781,10 +4065,9 @@ new file mode 100644
 +   *
 +   * @returns void
 +   */
-+  _displayRequestHeader: function NP_displayRequestHeader()
++  _displayRequestHeader: function NP__displayRequestHeader()
 +  {
 +    let entry = this.httpActivity.log.entries[0];
-+    let timing = entry.timings;
 +    let request = entry.request;
 +    let requestTime = WebConsoleUtils.
 +                      convertISO8601toMilliseconds(entry.startedDateTime);
@@ -3808,9 +4091,10 @@ new file mode 100644
 +   *
 +   * @returns void
 +   */
-+  _displayRequestBody: function NP_displayRequestBody() {
++  _displayRequestBody: function NP__displayRequestBody() {
++    let postData = this.httpActivity.log.entries[0].request.postData;
 +    this._displayNode("requestBody");
-+    this._appendTextNode("requestBodyContent", this.httpActivity.request.body);
++    this._appendTextNode("requestBodyContent", postData.text);
 +  },
 +
 +  /*
@@ -3819,8 +4103,9 @@ new file mode 100644
 +   *
 +   * @returns void
 +   */
-+  _displayRequestForm: function NP_processRequestForm() {
-+    let requestBodyLines = this.httpActivity.request.body.split("\n");
++  _displayRequestForm: function NP__processRequestForm() {
++    let postData = this.httpActivity.log.entries[0].request.postData.text;
++    let requestBodyLines = postData.split("\n");
 +    let formData = requestBodyLines[requestBodyLines.length - 1].
 +                      replace(/\+/g, " ").split("&");
 +
@@ -3834,16 +4119,19 @@ new file mode 100644
 +      }
 +    }
 +
-+    let formDataObj = {};
++    let formDataArray = [];
 +    for (let i = 0; i < formData.length; i++) {
 +      let data = formData[i];
 +      let idx = data.indexOf("=");
 +      let key = data.substring(0, idx);
 +      let value = data.substring(idx + 1);
-+      formDataObj[unescapeText(key)] = unescapeText(value);
++      formDataArray.push({
++        name: unescapeText(key),
++        value: unescapeText(value)
++      });
 +    }
 +
-+    this._appendList("requestFormDataContent", formDataObj);
++    this._appendList("requestFormDataContent", formDataArray);
 +    this._displayNode("requestFormData");
 +  },
 +
@@ -3938,7 +4226,7 @@ new file mode 100644
 +   *        responseBodyCached section is displayed.
 +   * @returns void
 +   */
-+  _displayResponseBody: function NP_displayResponseBody(aCachedContent)
++  _displayResponseBody: function NP__displayResponseBody(aCachedContent)
 +  {
 +    let entry = this.httpActivity.log.entries[0];
 +    let timing = entry.timings;
@@ -4008,6 +4296,7 @@ new file mode 100644
 +      return;
 +    }
 +
++    let stages = this.httpActivity.meta.stages;
 +    let entry = this.httpActivity.log.entries[0];
 +    let timing = entry.timings;
 +    let request = entry.request;
@@ -4021,8 +4310,7 @@ new file mode 100644
 +
 +      case this._DISPLAYED_REQUEST_HEADER:
 +        // Process the request body if there is one.
-+        // FIXME: need to be able to display the request body, if any.
-+        if (!request.bodyDiscarded && request.body) {
++        if (!this.httpActivity.meta.discardResponseBody && request.postData) {
 +          // Check if we send some form data. If so, display the form data special.
 +          if (this._isRequestBodyFormData) {
 +            this._displayRequestForm();
@@ -4038,7 +4326,7 @@ new file mode 100644
 +        // There is always a response header. Therefore we can skip here if
 +        // we don't have a response header yet and don't have to try updating
 +        // anything else in the NetworkPanel.
-+        if (!response.headers.length) {
++        if (!response.headers.length || !Object.keys(timing).length) {
 +          break;
 +        }
 +        this._displayResponseHeader();
@@ -4046,8 +4334,19 @@ new file mode 100644
 +        // FALL THROUGH
 +
 +      case this._DISPLAYED_RESPONSE_HEADER:
-+        dump("NetworkPanel update _DISPLAYED_RESPONSE_HEADER\n");
-+        if (this.httpActivity.stage != "REQUEST_STOP") {
++        dump("NetworkPanel update _DISPLAYED_RESPONSE_HEADER stages " + stages + "\n");
++        if (stages.indexOf("REQUEST_STOP") == -1 ||
++            stages.indexOf("TRANSACTION_CLOSE") == -1) {
++          break;
++        }
++
++        dump("NetworkPanel response.content " + response.content + " " + this.contentType + "\n");
++        if (response.content) {
++          dump("NetworkPanel response.content length " + response.content.text.length + "\n");
++        }
++
++        this._state = this._TRANSITION_CLOSED;
++        if (this.httpActivity.meta.discardResponseBody) {
 +          break;
 +        }
 +
@@ -4068,7 +4367,6 @@ new file mode 100644
 +          this._callIsDone();
 +        }
 +
-+        this._state = this._TRANSITION_CLOSED;
 +        dump("NetworkPanel update end\n");
 +        break;
 +    }
@@ -4218,7 +4516,7 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 +  },
 +
 +  /**
-+   * Convert a date from the ISO 8601 format into milliseconds since 1 January 
++   * Convert a date from the ISO 8601 format into milliseconds since 1 January
 +   * 1970 00:00:00 UTC.
 +   *
 +   * @param string aTime
