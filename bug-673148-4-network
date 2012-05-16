@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 0559398fe897dbc9ff543abb08dd9e2bd5b1cace
+# Parent 44a8222779ac4c4cd38598c2419d85f90bdec1c2
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1337111149 -10800
+# Date 1337200968 -10800
 
 Bug 673148 - (async-webconsole) Part 4 - Make network logging async
 
@@ -195,7 +195,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +   */
 +  handleGetPreferences: function Manager_handleGetPreferences(aMessage)
 +  {
-+    dump("handleGetPreferences " + aMessage.preferences + "\n");
++    //dump("handleGetPreferences " + aMessage.preferences + "\n");
 +
 +    let prefs = {};
 +    aMessage.preferences.forEach(function(aName) {
@@ -217,7 +217,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +   */
 +  handleSetPreferences: function Manager_handleSetPreferences(aMessage)
 +  {
-+    dump("handleSetPreferences " + Object.keys(aMessage.preferences) + "\n");
++    //dump("handleSetPreferences " + Object.keys(aMessage.preferences) + "\n");
 +
 +    for (let key in aMessage.preferences) {
 +      this.setPreference(key, aMessage.preferences[key]);
@@ -235,7 +235,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +   */
 +  getPreference: function Manager_getPreference(aName)
 +  {
-+    dump("getPreference " + aName + " " + this._prefs[aName] + "\n");
++    //dump("getPreference " + aName + " " + this._prefs[aName] + "\n");
 +    return aName in this._prefs ? this._prefs[aName] : null;
 +  },
 +
@@ -249,7 +249,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +   */
 +  setPreference: function Manager_setPreference(aName, aValue)
 +  {
-+    dump("setPreference " + aName + " " + aValue + "\n");
++    //dump("setPreference " + aName + " " + aValue + "\n");
 +    this._prefs[aName] = aValue;
 +  },
 +
@@ -375,7 +375,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
  
    /**
-@@ -1197,10 +1315,897 @@ let ConsoleListener = {
+@@ -1197,10 +1315,998 @@ let ConsoleListener = {
     * Remove the nsIConsoleService listener.
     */
    destroy: function CL_destroy()
@@ -401,21 +401,21 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +const RESPONSE_BODY_LIMIT = 1048576; // 1 MB
 +
 +/**
-+ * Implements the nsIStreamListener and nsIRequestObserver interfaces. This is
-+ * used within the NetworkMonitor feature to get the response body of the
-+ * request.
++ * The network response listener implements the nsIStreamListener and
++ * nsIRequestObserver interfaces. This is used within the NetworkMonitor feature
++ * to get the response body of the request.
 + *
 + * The code is mostly based on code listings from:
 + *
 + *   http://www.softwareishard.com/blog/firebug/
 + *      nsitraceablechannel-intercept-http-traffic/
 + *
++ * @constructor
 + * @param object aHttpActivity
-+ *        HttpActivity object associated with this request (see
-+ *        HS_httpObserverFactory). As the response is done, the response header,
-+ *        body and status is stored on aHttpActivity.
++ *        HttpActivity object associated with this request. Once the request is
++ *        complete the aHttpActivity object is updated to include the response
++ *        headers and body.
 + */
-+// TODO update comment
 +function NetworkResponseListener(aHttpActivity) {
 +  this.receivedData = "";
 +  this.httpActivity = aHttpActivity;
@@ -460,13 +460,11 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +   *
 +   * @param nsIAsyncInputStream aStream
 +   *        The input stream from where we are waiting for data to come in.
-+   *
 +   * @param nsIInputStreamCallback aListener
 +   *        The input stream callback you want. This is an object that must have
 +   *        the onInputStreamReady() method. If the argument is null, then the
 +   *        current callback is removed.
-+   *
-+   * @returns void
++   * @return void
 +   */
 +  setAsyncListener: function NRL_setAsyncListener(aStream, aListener)
 +  {
@@ -509,9 +507,9 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +   * @param nsIRequest aRequest
 +   * @param nsISupports aContext
 +   */
-+  onStartRequest: function NRL_onStartRequest(aRequest, aContext)
++  onStartRequest: function NRL_onStartRequest(aRequest)
 +  {
-+    dump("NRL_onStartRequest\n");
++    //dump("NRL_onStartRequest\n");
 +    this.request = aRequest;
 +
 +    this._findOpenResponse();
@@ -521,26 +519,29 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +  },
 +
 +  /**
-+   * Handle the onStopRequest by storing the response header is stored on the
-+   * httpActivity object. The sink output stream is also closed.
++   * Handle the onStopRequest by closing the sink output stream.
 +   *
 +   * For more documentation about nsIRequestObserver go to:
 +   * https://developer.mozilla.org/En/NsIRequestObserver
-+   *
-+   * @param nsIRequest aRequest
-+   *        The request we are observing.
-+   * @param nsISupports aContext
-+   * @param nsresult aStatusCode
 +   */
-+  onStopRequest: function NRL_onStopRequest(aRequest, aContext, aStatusCode)
++  onStopRequest: function NRL_onStopRequest()
 +  {
-+    dump("NRL_onStopRequest\n");
++    //dump("NRL_onStopRequest\n");
 +
 +    this._findOpenResponse();
 +
 +    this.sink.outputStream.close();
 +  },
 +
++  /**
++   * Find the open response object associated to the current request. The
++   * NetworkMonitor.httpResponseExaminer() method saves the response headers in
++   * NetworkMonitor.openResponses. This method takes the data from the open
++   * response object and puts it into the HTTP activity object, then sends it to
++   * the remote Web Console instance.
++   *
++   * @private
++   */
 +  _findOpenResponse: function NRL__findOpenResponse()
 +  {
 +    if (this._foundOpenResponse) {
@@ -557,7 +558,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +      }
 +    }
 +
-+    dump("NRL__findOpenResponse openResponse " + openResponse + "\n");
++    //dump("NRL__findOpenResponse openResponse " + openResponse + "\n");
 +
 +    if (!openResponse) {
 +      return;
@@ -586,15 +587,14 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +   * Clean up the response listener once the response input stream is closed.
 +   * This is called from onStopRequest() or from onInputStreamReady() when the
 +   * stream is closed.
-+   *
-+   * @returns void
++   * @return void
 +   */
 +  onStreamClose: function NRL_onStreamClose()
 +  {
 +    if (!this.httpActivity) {
 +      return;
 +    }
-+    dump("NRL_onStreamClose\n");
++    //dump("NRL_onStreamClose\n");
 +
 +    // Remove our listener from the request input stream.
 +    this.setAsyncListener(this.sink.inputStream, null);
@@ -603,7 +603,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +    this.httpActivity.meta.stages.push("REQUEST_STOP");
 +
-+    dump("NRL_onStreamClose discardResponseBody " + this.httpActivity.meta.discardResponseBody + " " + this.receivedData.length + "\n");
++    //dump("NRL_onStreamClose discardResponseBody " + this.httpActivity.meta.discardResponseBody + " " + this.receivedData.length + "\n");
 +
 +    if (!this.httpActivity.meta.discardResponseBody &&
 +        this.receivedData.length) {
@@ -613,6 +613,11 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +        mimeType: logResponse.contentType,
 +        text: this.receivedData,
 +      };
++
++      // Note that bodySize and content.size may not be accurate due to the
++      // RESPONSE_BODY_LIMIT cap. Also, at this point we are not concerned about
++      // response body compression - which is a violation of the HAR spec.
++      logResponse.bodySize = this.receivedData.length;
 +    }
 +
 +    this.receivedData = "";
@@ -623,6 +628,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    this.httpActivity = null;
 +    this.sink = null;
 +    this.inputStream = null;
++    this.request = null;
 +  },
 +
 +  /**
@@ -631,7 +637,6 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +   *
 +   * @param nsIAsyncInputStream aStream
 +   *        The sink input stream from which data is coming.
-+   *
 +   * @returns void
 +   */
 +  onInputStreamReady: function NRL_onInputStreamReady(aStream)
@@ -662,6 +667,12 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +  },
 +};
 +
++/**
++ * The network monitor uses the nsIHttpActivityDistributor to monitor network
++ * requests. The nsIObserverService is also used for monitoring
++ * http-on-examine-response notifications. All network request information is
++ * routed to the remote Web Console.
++ */
 +let NetworkMonitor = {
 +  httpTransactionCodes: {
 +    0x5001: "REQUEST_HEADER",
@@ -701,6 +712,15 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +  openResponses: null,
 +  progressListener: null,
 +
++  /**
++   * The network monitor initializer.
++   *
++   * @param object aMessage
++   *        Initialization object sent by the remote Web Console instance. This
++   *        object can hold one property: monitorFileActivity - a boolean that
++   *        tells if monitoring of file:// requests should be enabled as well or
++   *        not.
++   */
 +  init: function NM_init(aMessage)
 +  {
 +    this.responsePipeSegmentSize = Services.prefs
@@ -714,6 +734,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    Services.obs.addObserver(this.httpResponseExaminer,
 +                             "http-on-examine-response", false);
 +
++    // Monitor file:// activity as well.
 +    if (aMessage && aMessage.monitorFileActivity) {
 +      let webProgress = docShell.QueryInterface(Ci.nsIWebProgress);
 +      this.progressListener = new ConsoleProgressListener();
@@ -724,16 +745,16 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +  /**
 +   * Observe notifications for the http-on-examine-response topic, coming from
-+   * the nsIObserver service.
++   * the nsIObserverService.
 +   *
-+   * @param string aTopic
 +   * @param nsIHttpChannel aSubject
++   * @param string aTopic
 +   * @returns void
 +   */
 +  httpResponseExaminer: function NM_httpResponseExaminer(aSubject, aTopic)
 +  {
 +    // The httpResponseExaminer is used to retrieve the uncached response
-+    // headers. The data retrieved is stored in openResponses. When
++    // headers. The data retrieved is stored in openResponses. The
 +    // NetworkResponseListener is responsible with updating the httpActivity
 +    // object with the data from the new object in openResponses.
 +
@@ -746,11 +767,11 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    // Try to get the source window of the request.
 +    let win = NetworkHelper.getWindowForRequest(channel);
 +    if (!win || win.top !== Manager.window) {
-+      dump("httpResponseExaminer wrong window\n");
++      //dump("httpResponseExaminer wrong window\n");
 +      return;
 +    }
 +
-+    dump("httpResponseExaminer\n");
++    //dump("httpResponseExaminer\n");
 +
 +    let response = {
 +      id: Manager.sequenceId,
@@ -798,17 +819,23 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    response.httpVersion = "HTTP/" + httpVersionMaj.value + "." +
 +                                     httpVersionMin.value;
 +
-+    dump("httpResponseExaminer response.httpVersion '" + response.httpVersion + "' '" + response.status + "' '" + response.statusText + "'\n");
++    //dump("httpResponseExaminer response.httpVersion '" + response.httpVersion + "' '" + response.status + "' '" + response.statusText + "'\n");
 +
 +    NetworkMonitor.openResponses[response.id] = response;
 +  },
 +
 +  /**
-+   * Begin observing HTTP traffic that we care about,
-+   * namely traffic that originates inside any context that a Web Console
-+   * is active for.
++   * Begin observing HTTP traffic that originates inside the current tab.
++   *
++   * @see https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsIHttpActivityObserver
++   *
++   * @param nsIHttpChannel aChannel
++   * @param number aActivityType
++   * @param number aActivitySubtype
++   * @param number aTimestamp
++   * @param number aExtraSizeData
++   * @param string aExtraStringData
 +   */
-+  // TODO: update comment
 +  observeActivity:
 +  function NM_observeActivity(aChannel, aActivityType, aActivitySubtype,
 +                              aTimestamp, aExtraSizeData, aExtraStringData)
@@ -816,14 +843,14 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    if (!_alive ||
 +        aActivityType != activityDistributor.ACTIVITY_TYPE_HTTP_TRANSACTION &&
 +        aActivityType != activityDistributor.ACTIVITY_TYPE_SOCKET_TRANSPORT) {
-+      dump("observeActivity type unknown\n");
++      //dump("observeActivity type unknown\n");
 +      return;
 +    }
 +
 +    //dump("observeActivity ACTIVITY_TYPE_HTTP_TRANSACTION || ACTIVITY_TYPE_SOCKET_TRANSPORT\n");
 +
 +    if (!(aChannel instanceof Ci.nsIHttpChannel)) {
-+      dump("observeActivity aChannel not instanceof nsIHttpChannel\n");
++      //dump("observeActivity aChannel not instanceof nsIHttpChannel\n");
 +      return;
 +    }
 +
@@ -846,7 +873,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    }
 +
 +    if (!httpActivity) {
-+      dump("found no httpActivity\n");
++      //dump("found no httpActivity\n");
 +      return;
 +    }
 +
@@ -855,7 +882,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    // Store the time information for this activity subtype.
 +    if (aActivitySubtype in transCodes) {
 +      let stage = transCodes[aActivitySubtype];
-+      dump("timings " + stage + " " + aTimestamp + "\n");
++      //dump("timings " + stage + " " + aTimestamp + "\n");
 +      if (stage in httpActivity.timings) {
 +        httpActivity.timings[stage].last = aTimestamp;
 +      }
@@ -884,22 +911,33 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    }
 +  },
 +
-+  // TODO: add comments
++  /**
++   * Handler for ACTIVITY_SUBTYPE_REQUEST_HEADER. When a request starts the
++   * headers are sent to the server. This method creates the |httpActivity|
++   * object where we store the request and response information that is
++   * collected through its lifetime.
++   *
++   * @private
++   * @param nsIHttpChannel aChannel
++   * @param number aTimestamp
++   * @param string aExtraStringData
++   * @return void
++   */
 +  _onRequestHeader:
 +  function NM__onRequestHeader(aChannel, aTimestamp, aExtraStringData)
 +  {
-+    dump("NM__onRequestHeader\n");
++    //dump("NM__onRequestHeader\n");
 +    // Try to get the source window of the request.
 +    let win = NetworkHelper.getWindowForRequest(aChannel);
-+    if (!win || win.top !== JSTerm.window) {
++    if (!win || win.top !== Manager.window) {
 +      return;
 +    }
 +
-+    let httpActivity = this._createActivityObject(aChannel);
++    let httpActivity = this.createActivityObject(aChannel);
 +    httpActivity.charset = win.document.characterSet; // see NM__onRequestBodySent()
 +    httpActivity.meta.stages.push("REQUEST_HEADER"); // activity stage (aActivitySubtype)
 +
-+    dump("_onRequestHeader save bodies " + this.saveRequestAndResponseBodies + "\n");
++    //dump("_onRequestHeader save bodies " + this.saveRequestAndResponseBodies + "\n");
 +
 +    httpActivity.timings.REQUEST_HEADER = {
 +      first: aTimestamp,
@@ -907,10 +945,9 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    };
 +
 +    let entry = httpActivity.log.entries[0];
-+    // TODO: check date parsing works
 +    entry.startedDateTime = new Date(Math.round(aTimestamp / 1000)).toISOString();
 +
-+    dump("_onRequestHeader start date " + entry.startedDateTime + "\n");
++    //dump("_onRequestHeader start date " + entry.startedDateTime + "\n");
 +
 +    let request = httpActivity.log.entries[0].request;
 +
@@ -941,7 +978,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    request.httpVersion = "HTTP/" + httpVersionMaj.value + "." +
 +                                    httpVersionMin.value;
 +
-+    dump("request.httpVersion " + request.httpVersion + "\n");
++    //dump("request.httpVersion " + request.httpVersion + "\n");
 +
 +    request.headersSize = aExtraStringData.length;
 +
@@ -952,15 +989,23 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    this.sendActivity(httpActivity);
 +  },
 +
-+  _createActivityObject: function NM__createActivityObject(aChannel)
++  /**
++   * Create the empty HTTP activity object. This object is used for storing all
++   * the request and response information.
++   *
++   * This is a HAR-like object. Conformance to the spec is not guaranteed at
++   * this point.
++   *
++   * TODO: Bug 708717 - Add support for network log export to HAR
++   *
++   * @see http://www.softwareishard.com/blog/har-12-spec
++   * @param nsIHttpChannel aChannel
++   *        The HTTP channel for which the HTTP activity object is created.
++   * @return object
++   *         The new HTTP activity object.
++   */
++  createActivityObject: function NM_createActivityObject(aChannel)
 +  {
-+    // The httpActivity object will hold all information concerning this request
-+    // and later response.
-+    // This is a HAR-like object. Conformance to the spec is not guaranteed at
-+    // this point.
-+    // TODO: Bug 708717 - Add support for network log export to HAR
-+    // Also see: http://www.softwareishard.com/blog/har-12-spec
-+    // TODO: update these comments.
 +    return {
 +      hudId: Manager.hudId,
 +      id: Manager.sequenceId,
@@ -971,16 +1016,16 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +        discardRequestBody: !this.saveRequestAndResponseBodies,
 +        discardResponseBody: !this.saveRequestAndResponseBodies,
 +      },
-+      timings: {}, // internal timing information
-+      log: { // HAR object
++      timings: {}, // internal timing information, see NM_observeActivity()
++      log: { // HAR-like object
 +        version: "1.2",
 +        creator: this.harCreator,
-+        // could add browser and pages.
-+        entries: [{
-+          connection: Manager.sequenceId,
++        // missing |browser| and |pages|
++        entries: [{  // we only track one entry at a time
++          connection: Manager.sequenceId, // connection ID
 +          startedDateTime: 0, // see NM__onRequestHeader()
-+          time: 0, // see NM__onTransactionClose()
-+          // could add serverIPAddress, cache
++          time: 0, // see NM__setupHarTimings()
++          // missing |serverIPAddress| and |cache|
 +          request: {
 +            method: aChannel.requestMethod,
 +            url: aChannel.URI.spec,
@@ -996,19 +1041,27 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +            status: 0, // see NM__onResponseHeader()
 +            statusText: "", // see NM__onResponseHeader()
 +            httpVersion: "", // see NM__onResponseHeader()
-+            headers: [], // see NM__onResponseHeader()
-+            cookies: [], // see NM__onResponseHeader()
-+            content: null, // see NRL_onStopRequest()
-+            redirectURL: "",
++            headers: [], // see NM_httpResponseExaminer()
++            cookies: [], // see NM_httpResponseExaminer()
++            content: null, // see NRL_onStreamClose()
++            redirectURL: "", // never set
 +            headersSize: -1, // see NM__onResponseHeader()
-+            bodySize: -1,
++            bodySize: -1, // see NRL_onStreamClose()
 +          },
-+          timings: {}, // see NM__onTransactionClose()
++          timings: {}, // see NM__setupHarTimings()
 +        }],
 +      },
 +    };
 +  },
 +
++  /**
++   * Setup the network response listener for the given HTTP activity. The
++   * NetworkResponseListener is responsible for storing the response body.
++   *
++   * @private
++   * @param object aHttpActivity
++   *        The HTTP activity object we are tracking.
++   */
 +  _setupResponseListener: function NM__setupResponseListener(aHttpActivity)
 +  {
 +    let channel = aHttpActivity.channel;
@@ -1039,23 +1092,41 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    tee.init(originalListener, sink.outputStream, newListener);
 +  },
 +
++  /**
++   * Send an HTTP activity object to the remote Web Console instance.
++   * A WebConsole:NetworkActivity message is sent. The message holds two
++   * properties:
++   *   - meta - the |aHttpActivity.meta| object.
++   *   - log - the |aHttpActivity.log| object.
++   *
++   * @param object aHttpActivity
++   *        The HTTP activity object you want to send.
++   */
 +  sendActivity: function NM_sendActivity(aHttpActivity)
 +  {
-+    dump("NM_sendActivity " + aHttpActivity.meta.stages + "\n");
++    //dump("NM_sendActivity " + aHttpActivity.meta.stages + "\n");
 +    Manager.sendMessage("WebConsole:NetworkActivity", {
 +      meta: aHttpActivity.meta,
 +      log: aHttpActivity.log,
 +    });
 +  },
 +
++  /**
++   * Handler for ACTIVITY_SUBTYPE_REQUEST_BODY_SENT. The request body is logged
++   * here.
++   *
++   * @private
++   * @param object aHttpActivity
++   *        The HTTP activity object we are working with.
++   */
 +  _onRequestBodySent: function NM__onRequestBodySent(aHttpActivity)
 +  {
 +    if (aHttpActivity.meta.discardRequestBody) {
-+      dump("NM__onRequestBodySent body discarded\n");
++      //dump("NM__onRequestBodySent body discarded\n");
 +      return;
 +    }
 +    else {
-+      dump("NM__onRequestBodySent saving it\n");
++      //dump("NM__onRequestBodySent saving it\n");
 +    }
 +
 +    let request = aHttpActivity.log.entries[0].request;
@@ -1065,17 +1136,17 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +                                           aHttpActivity.charset);
 +
 +    if (sentBody) {
-+      dump("sentBody1 " + sentBody.length + "\n");
++      //dump("sentBody1 " + sentBody.length + "\n");
 +    }
 +    else {
-+      dump("sentBody1 empty\n");
++      //dump("sentBody1 empty\n");
 +    }
 +
 +    if (!sentBody && request.url == Manager.window.location.href) {
-+      // If the request URL is the same as the current page url, then
++      // If the request URL is the same as the current page URL, then
 +      // we can try to get the posted text from the page directly.
 +      // This check is necessary as otherwise the
-+      //   NetworkHelper.readPostTextFromPage
++      //   NetworkHelper.readPostTextFromPage()
 +      // function is called for image requests as well but these
 +      // are not web pages and as such don't store the posted text
 +      // in the cache of the webpage.
@@ -1083,26 +1154,33 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +                                                    aHttpActivity.charset);
 +    }
 +    if (!sentBody) {
-+      dump("sentBody empty\n");
++      //dump("sentBody empty\n");
 +      return;
 +    }
 +
-+    dump("sentBody " + sentBody.length + "\n");
++    //dump("sentBody " + sentBody.length + "\n");
 +
 +    request.postData = {
-+      mimeType: "",
-+      params: [],
++      mimeType: "", // never set
++      params: [],  // never set
 +      text: sentBody,
-+      // could add mimeType and params
 +    };
 +
-+    // Note that this might not be accurate. This should be the size before
-+    // decompression, according to the HAR spec.
 +    request.bodySize = sentBody.length;
 +
 +    this.sendActivity(aHttpActivity);
 +  },
 +
++  /**
++   * Handler for ACTIVITY_SUBTYPE_RESPONSE_HEADER. This method stores
++   * information about the response headers.
++   *
++   * @private
++   * @param object aHttpActivity
++   *        The HTTP activity object we are working with.
++   * @param string aExtraStringData
++   *        The uncached response headers.
++   */
 +  _onResponseHeader:
 +  function NM__onResponseHeader(aHttpActivity, aExtraStringData)
 +  {
@@ -1116,7 +1194,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    // We could parse aExtraStringData to get the headers and their values, but
 +    // that is not trivial to do in an accurate manner. Hence, we save the
 +    // response headers in this.httpResponseExaminer().
-+    dump("NM__onResponseHeader\n");
++    //dump("NM__onResponseHeader\n");
 +
 +    let response = aHttpActivity.log.entries[0].response;
 +
@@ -1136,38 +1214,61 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +      case HTTP_SEE_OTHER:
 +      case HTTP_TEMPORARY_REDIRECT:
 +        aHttpActivity.meta.discardResponseBody = true;
-+        dump("NM__onResponseHeader discardResponseBody\n");
++        //dump("NM__onResponseHeader discardResponseBody\n");
 +        break;
 +    }
 +
-+    dump("NM__onResponseHeader statusLine '" + statusLine + "' response.httpVersion '" + response.httpVersion + "' '" + response.status + "' '" + response.statusText + "'\n");
++    //dump("NM__onResponseHeader statusLine '" + statusLine + "' response.httpVersion '" + response.httpVersion + "' '" + response.status + "' '" + response.statusText + "'\n");
 +
 +    this.sendActivity(aHttpActivity);
 +  },
 +
++  /**
++   * Handler for ACTIVITY_SUBTYPE_TRANSACTION_CLOSE. This method updates the HAR
++   * timing information on the HTTP activity object and clears the request
++   * from the list of known open requests.
++   *
++   * @private
++   * @param object aHttpActivity
++   *        The HTTP activity object we work with.
++   */
 +  _onTransactionClose: function NM__onTransactionClose(aHttpActivity)
 +  {
 +    this._setupHarTimings(aHttpActivity);
 +
 +    let entry = aHttpActivity.log.entries[0];
 +
-+    dump("_onTransactionClose total " + entry.time + "ms\n");
++    //dump("_onTransactionClose total " + entry.time + "ms\n");
 +
 +    this.sendActivity(aHttpActivity);
 +
 +    delete this.openRequests[aHttpActivity.id];
 +  },
 +
++  /**
++   * Update the HTTP activity object to include timing information as in the HAR
++   * spec. The HTTP activity object holds the raw timing information in
++   * |timings| - these are timings stored for each activity notification. The
++   * HAR timing information is constructed based on these lower level data.
++   *
++   * @param object aHttpActivity
++   *        The HTTP activity object we are working with.
++   */
 +  _setupHarTimings: function NM__setupHarTimings(aHttpActivity)
 +  {
 +    let timings = aHttpActivity.timings;
 +    let entry = aHttpActivity.log.entries[0];
 +    let harTimings = entry.timings;
 +
++    // Not clear how we can determine "blocked" time.
 +    harTimings.blocked = -1;
++
++    // DNS timing information is available only in when the DNS record is not
++    // cached.
 +    harTimings.dns = timings.STATUS_RESOLVING ?
 +                     timings.STATUS_RESOLVED.last -
 +                     timings.STATUS_RESOLVING.first : -1;
++
 +    if (timings.STATUS_CONNECTING_TO) {
 +      harTimings.connect = timings.STATUS_CONNECTED_TO.last -
 +                           timings.STATUS_CONNECTING_TO.first;
@@ -1187,7 +1288,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    harTimings.receive = timings.RESPONSE_COMPLETE.last -
 +                         timings.RESPONSE_START.first;
 +
-+    dump("harTimings1 dns " + harTimings.dns + " connect " + harTimings.connect + " send " + harTimings.send + " wait " + harTimings.wait + " receive " + harTimings.receive + "\n");
++    //dump("harTimings1 dns " + harTimings.dns + " connect " + harTimings.connect + " send " + harTimings.send + " wait " + harTimings.wait + " receive " + harTimings.receive + "\n");
 +
 +    entry.time = 0;
 +    for (let timing in harTimings) {
@@ -1198,19 +1299,17 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +      }
 +    }
 +
-+    dump("harTimings2 dns " + harTimings.dns + " connect " + harTimings.connect + " send " + harTimings.send + " wait " + harTimings.wait + " receive " + harTimings.receive + "\n");
-+    dump("expected total " + Math.round((timings.TRANSACTION_CLOSE.last - timings.REQUEST_HEADER.first)/1000) + " ms\n");
++    //dump("harTimings2 dns " + harTimings.dns + " connect " + harTimings.connect + " send " + harTimings.send + " wait " + harTimings.wait + " receive " + harTimings.receive + "\n");
++    //dump("expected total " + Math.round((timings.TRANSACTION_CLOSE.last - timings.REQUEST_HEADER.first)/1000) + " ms\n");
 +  },
 +
 +  /**
 +   * Suspend Web Console activity. This is called when all Web Consoles are
 +   * closed.
-+   *
-+   * @returns void
 +   */
 +  destroy: function NM_destroy()
 +  {
-+    dump("NM_destroy\n");
++    //dump("NM_destroy\n");
 +
 +    Services.obs.removeObserver(this.httpResponseExaminer,
 +                                "http-on-examine-response");
@@ -1230,7 +1329,9 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +/**
 + * A WebProgressListener that listens for location changes. This progress
-+ * listener is used to track file loads.
++ * listener is used to track file loads. When a file:// URI is loaded
++ * a "WebConsole:FileActivity" message is sent to the remote Web Console
++ * instance. The message JSON holds only one property: uri (the file URI).
 + *
 + * @constructor
 + */
@@ -1261,7 +1362,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +      return;
 +    }
 +
-+    dump("CPL_onStateChange " + uri.spec + "\n");
++    //dump("CPL_onStateChange " + uri.spec + "\n");
 +    Manager.sendMessage("WebConsole:FileActivity", {uri: uri.spec});
 +  },
 +
@@ -1276,7 +1377,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -48,50 +48,29 @@
+@@ -48,95 +48,60 @@
  const Cc = Components.classes;
  const Ci = Components.interfaces;
  const Cu = Components.utils;
@@ -1325,9 +1426,40 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    return obj.template;
  });
  
- XPCOMUtils.defineLazyGetter(this, "PropertyPanel", function () {
-   let obj = {};
-@@ -122,16 +101,22 @@ XPCOMUtils.defineLazyGetter(this, "Scrat
+-XPCOMUtils.defineLazyGetter(this, "PropertyPanel", function () {
+-  let obj = {};
+-  Cu.import("resource:///modules/PropertyPanel.jsm", obj);
+-  return obj.PropertyPanel;
+-});
+-
+-XPCOMUtils.defineLazyGetter(this, "PropertyTreeView", function () {
+-  let obj = {};
+-  Cu.import("resource:///modules/PropertyPanel.jsm", obj);
+-  return obj.PropertyTreeView;
+-});
+-
+-XPCOMUtils.defineLazyGetter(this, "AutocompletePopup", function () {
+-  var obj = {};
+-  try {
+-    Cu.import("resource:///modules/AutocompletePopup.jsm", obj);
+-  }
+-  catch (err) {
+-    Cu.reportError(err);
+-  }
+-  return obj.AutocompletePopup;
+-});
++XPCOMUtils.defineLazyModuleGetter(this, "PropertyPanel",
++                                  "resource:///modules/PropertyPanel.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "PropertyTreeView",
++                                  "resource:///modules/PropertyPanel.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "AutocompletePopup",
++                                  "resource:///modules/AutocompletePopup.jsm");
+ 
+ XPCOMUtils.defineLazyGetter(this, "ScratchpadManager", function () {
+   var obj = {};
+   try {
      Cu.import("resource:///modules/devtools/scratchpad-manager.jsm", obj);
    }
    catch (err) {
@@ -1336,21 +1468,25 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    return obj.ScratchpadManager;
  });
  
-+XPCOMUtils.defineLazyGetter(this, "NetworkPanel", function() {
-+  let obj = {};
-+  Cu.import("resource:///modules/NetworkPanel.jsm", obj);
-+  return obj.NetworkPanel;
-+});
+-XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function () {
+-  let obj = {};
+-  Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
+-  return obj.WebConsoleUtils;
+-});
++XPCOMUtils.defineLazyModuleGetter(this, "NetworkPanel",
++                                  "resource:///modules/NetworkPanel.jsm");
 +
- XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function () {
-   let obj = {};
-   Cu.import("resource:///modules/WebConsoleUtils.jsm", obj);
-   return obj.WebConsoleUtils;
- });
++XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
++                                  "resource:///modules/WebConsoleUtils.jsm");
  
  XPCOMUtils.defineLazyGetter(this, "l10n", function() {
    return WebConsoleUtils.l10n;
-@@ -186,34 +171,29 @@ const SEVERITY_LOG = 3;
+ });
+ 
+ function LogFactory(aMessagePrefix)
+ {
+   function log(aMessage) {
+@@ -186,34 +151,29 @@ const SEVERITY_LOG = 3;
  // A mapping from the console API log event levels to the Web Console
  // severities.
  const LEVELS = {
@@ -1388,7 +1524,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
  
  // The fragment of a CSS class name that identifies each category.
-@@ -252,323 +232,42 @@ const MESSAGE_PREFERENCE_KEYS = [
+@@ -252,323 +212,42 @@ const MESSAGE_PREFERENCE_KEYS = [
  // Possible directions that can be passed to HUDService.animate().
  const ANIMATE_OUT = 0;
  const ANIMATE_IN = 1;
@@ -1712,7 +1848,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * element.
   *
   * @param nsIDOMDocument aDocument
-@@ -586,647 +285,16 @@ function createElement(aDocument, aTag, 
+@@ -586,647 +265,16 @@ function createElement(aDocument, aTag, 
    if (aAttributes) {
      for (let attr in aAttributes) {
        node.setAttribute(attr, aAttributes[attr]);
@@ -2360,7 +2496,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * category's line limit by removing old messages as needed.
   *
   * @param aHUDId aHUDId
-@@ -1306,21 +374,16 @@ function HUD_SERVICE()
+@@ -1306,21 +354,16 @@ function HUD_SERVICE()
    // These methods access the "this" object, but they're registered as
    // event listeners. So we hammer in the "this" binding.
    this.onTabClose = this.onTabClose.bind(this);
@@ -2382,7 +2518,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Collection of outer window IDs mapping to HUD IDs.
-@@ -1331,26 +394,16 @@ function HUD_SERVICE()
+@@ -1331,26 +374,16 @@ function HUD_SERVICE()
     * Each HeadsUpDisplay has a set of filter preferences
     */
    this.filterPrefs = {};
@@ -2409,7 +2545,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * getter for UI commands to be used by the frontend
     *
     * @returns object
-@@ -1361,22 +414,16 @@ HUD_SERVICE.prototype =
+@@ -1361,22 +394,16 @@ HUD_SERVICE.prototype =
  
    /**
     * The sequencer is a generator (after initialization) that returns unique
@@ -2432,7 +2568,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    registerActiveContext: function HS_registerActiveContext(aContextDOMId)
    {
-@@ -1485,20 +532,16 @@ HUD_SERVICE.prototype =
+@@ -1485,20 +512,16 @@ HUD_SERVICE.prototype =
      let displayNode = chromeDocument.getElementById(hudId);
      let hudFound = (hudId in this.hudReferences) && displayNode;
  
@@ -2453,7 +2589,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Remove this context from the list of contexts that need the GCLI CSS
      // processing instruction and then remove the processing instruction if it
-@@ -1762,16 +805,24 @@ HUD_SERVICE.prototype =
+@@ -1762,16 +785,24 @@ HUD_SERVICE.prototype =
  
      // Remove children from the output. If the output is not cleared, there can
      // be leaks as some nodes has node.onclick = function; set and GC can't
@@ -2478,7 +2614,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Remove the HUDBox and the consolePanel if the Web Console is inside a
      // floating panel.
-@@ -1792,24 +843,18 @@ HUD_SERVICE.prototype =
+@@ -1792,24 +823,18 @@ HUD_SERVICE.prototype =
      for (let windowID in this.windowIds) {
        if (this.windowIds[windowID] == aHUDId) {
          delete this.windowIds[windowID];
@@ -2504,7 +2640,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        this.suspend();
      }
    },
-@@ -1821,39 +866,27 @@ HUD_SERVICE.prototype =
+@@ -1821,41 +846,28 @@ HUD_SERVICE.prototype =
     * @returns void
     */
    wakeup: function HS_wakeup()
@@ -2537,14 +2673,31 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    this.openResponseHeaders = {};
 -
      delete this.defaultFilterPrefs;
- 
+-
      delete this.lastFinishedRequestCallback;
  
      WebConsoleObserver.uninit();
    },
  
    /**
-@@ -1989,443 +1022,36 @@ HUD_SERVICE.prototype =
+    * Shutdown all HeadsUpDisplays on xpcom-shutdown
+    *
+@@ -1979,453 +991,61 @@ HUD_SERVICE.prototype =
+   /**
+    * Registry of ApplicationHooks used by specified Gecko Apps
+    *
+    * @returns Specific Gecko 'ApplicationHooks' Object/Mixin
+    */
+   applicationHooks: null,
+ 
+   /**
+-   * Assign a function to this property to listen for finished httpRequests.
+-   * Used by unit tests.
++   * Assign a function to this property to listen for every request that
++   * completes. Used by unit tests. The callback takes one argument: the HTTP
++   * activity object as received from the remote Web Console.
++   *
++   * @type function
     */
    lastFinishedRequestCallback: null,
  
@@ -2552,29 +2705,39 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Opens a NetworkPanel.
     *
     * @param nsIDOMNode aNode
-    *        DOMNode to display the panel next to.
--   * @param object aHttpActivity
+-   *        DOMNode to display the panel next to.
++   *        The message node you want the panel to be anchored to.
+    * @param object aHttpActivity
 -   *        httpActivity object. The data of this object is displayed in the
 -   *        NetworkPanel.
-    * @returns NetworkPanel
+-   * @returns NetworkPanel
++   *        The HTTP activity object that holds network request and response
++   *        information. This object is given to the NetworkPanel constructor.
++   * @return object
++   *         The new NetworkPanel instance.
     */
--  openNetworkPanel: function HS_openNetworkPanel(aNode, aHttpActivity)
-+  // TODO: update comment
-+  openNetworkPanel: function HS_openNetworkPanel(aNode)
+   openNetworkPanel: function HS_openNetworkPanel(aNode, aHttpActivity)
    {
      let doc = aNode.ownerDocument;
      let parent = doc.getElementById("mainPopupSet");
--    let netPanel = new NetworkPanel(parent, aHttpActivity);
-+    let netPanel = new NetworkPanel(parent, aNode._httpActivity);
+     let netPanel = new NetworkPanel(parent, aHttpActivity);
      netPanel.linkNode = aNode;
 +    aNode._netPanel = netPanel;
  
      let panel = netPanel.panel;
-+    panel.setAttribute("hudId", aNode._httpActivity.hudId);
      panel.openPopup(aNode, "after_pointer", 0, 0, false, false);
      panel.sizeTo(450, 500);
--    panel.setAttribute("hudId", aHttpActivity.hudId);
+     panel.setAttribute("hudId", aHttpActivity.hudId);
 -    aHttpActivity.panels.push(Cu.getWeakReference(netPanel));
++
++    panel.addEventListener("popuphiding", function HS_netPanel_onHide() {
++      panel.removeEventListener("popuphiding", HS_netPanel_onHide);
++
++      aNode._panelOpen = false;
++      aNode._netPanel = null;
++    });
++
++    aNode._panelOpen = true;
 +
      return netPanel;
    },
@@ -2994,7 +3157,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    createSequencer: function HS_createSequencer(aInt)
    {
      function sequencer(aInt)
-@@ -2555,21 +1181,16 @@ HUD_SERVICE.prototype =
+@@ -2555,21 +1175,16 @@ HUD_SERVICE.prototype =
                       contentWindow: aContentWindow.top
                     };
  
@@ -3016,7 +3179,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          hud.reattachConsole(aContentWindow);
        }
      }
-@@ -2879,25 +1500,54 @@ HeadsUpDisplay.prototype = {
+@@ -2879,25 +1494,54 @@ HeadsUpDisplay.prototype = {
     * Web Console content script.
     *
     * @private
@@ -3072,7 +3235,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Get the tab associated to the HeadsUpDisplay object.
     */
-@@ -3558,27 +2208,27 @@ HeadsUpDisplay.prototype = {
+@@ -3558,27 +2202,27 @@ HeadsUpDisplay.prototype = {
     *        The console output DOM node.
     * @returns void
     */
@@ -3103,7 +3266,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      copyItem.setAttribute("label", l10n.getStr("copyCmd.label"));
      copyItem.setAttribute("accesskey", l10n.getStr("copyCmd.accesskey"));
      copyItem.setAttribute("key", "key_copy");
-@@ -3961,16 +2611,112 @@ HeadsUpDisplay.prototype = {
+@@ -3961,16 +2605,117 @@ HeadsUpDisplay.prototype = {
                                                aScriptError.lineNumber,
                                                null,
                                                null,
@@ -3113,15 +3276,14 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    },
  
 +  /**
-+   * Logs network activity.
++   * Log network activity.
 +   *
-+   * @param object aActivityObject
-+   *        The activity to log.
++   * @param object aHttpActivity
++   *        The HTTP activity to log.
 +   */
-+  // TODO: update the comment
-+  logNetActivity: function HUD_logNetActivity(aMessage)
++  logNetActivity: function HUD_logNetActivity(aHttpActivity)
 +  {
-+    let entry = aMessage.log.entries[0];
++    let entry = aHttpActivity.log.entries[0];
 +    let request = entry.request;
 +
 +    let msgNode = this.chromeDocument.createElementNS(XUL_NS, "hbox");
@@ -3167,20 +3329,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +    messageNode.setAttribute("connectionId", entry.connection);
 +
-+    messageNode._httpActivity = aMessage;
++    messageNode._httpActivity = aHttpActivity;
 +
 +    this.makeOutputMessageLink(messageNode, function HUD_net_message_link() {
 +      if (!messageNode._panelOpen) {
-+        HUDService.openNetworkPanel(messageNode);
++        HUDService.openNetworkPanel(messageNode, messageNode._httpActivity);
 +      }
 +    }.bind(this));
 +
 +    ConsoleUtils.outputMessageNode(messageNode, this.hudId);
 +  },
 +
++  /**
++   * Log file activity.
++   *
++   * @param string aFileURI
++   *        The file URI that was loaded.
++   */
 +  logFileActivity: function HUD_logFileActivity(aFileURI)
 +  {
-+    dump("HUD_logFileActivity " + aFileURI + "\n");
++    //dump("HUD_logFileActivity " + aFileURI + "\n");
 +    let chromeDocument = this.chromeDocument;
 +
 +    let urlNode = chromeDocument.createElementNS(XUL_NS, "label");
@@ -3216,7 +3384,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Setup the message manager used to communicate with the Web Console content
-@@ -3983,19 +2729,23 @@ HeadsUpDisplay.prototype = {
+@@ -3983,19 +2728,23 @@ HeadsUpDisplay.prototype = {
    {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
@@ -3242,7 +3410,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Handler for all of the messages coming from the Web Console content script.
     *
     * @private
-@@ -4027,16 +2777,22 @@ HeadsUpDisplay.prototype = {
+@@ -4027,16 +2776,22 @@ HeadsUpDisplay.prototype = {
          break;
        case "WebConsole:PageError":
          this.reportPageError(aMessage.json.pageError);
@@ -3265,8 +3433,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * now this method sends the web-console-created notification using the
     * nsIObserverService.
     *
-@@ -4103,30 +2859,80 @@ HeadsUpDisplay.prototype = {
-         message: aMessage,
+@@ -4104,29 +2859,100 @@ HeadsUpDisplay.prototype = {
          callback: aCallback,
        };
      }
@@ -3274,11 +3441,24 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.messageManager.sendAsyncMessage(aName, aMessage);
    },
  
-+  // TODO: add a comment.
+   /**
++   * Handle the "WebConsole:NetworkActivity" message coming from the remote Web
++   * Console.
++   *
++   * @param object aMessage
++   *        The HTTP activity object. This object needs to hold two properties:
++   *        - meta - some metadata about the request log:
++   *          - stages - the stages the network request went through.
++   *          - discardRequestBody and discardResponseBody - booleans that tell
++   *          if the network request/response body was discarded or not.
++   *        - log - the request and response information. This is a HAR-like
++   *        object. See HUDService-content.js
++   *        NetworkMonitor.createActivityObject().
++   */
 +  handleNetworkActivity: function HUD_handleNetworkActivity(aMessage)
 +  {
 +    let stage = aMessage.meta.stages[aMessage.meta.stages.length - 1];
-+    dump("HUD_handleNetworkActivity stage " + stage + " stages " + aMessage.meta.stages + "\n");
++    //dump("HUD_handleNetworkActivity stage " + stage + " stages " + aMessage.meta.stages + "\n");
 +
 +    if (stage == "REQUEST_HEADER") {
 +      this.logNetActivity(aMessage);
@@ -3292,7 +3472,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    let messageNode = this.outputNode.
 +      querySelector("richlistitem[connectionId=" + entry.connection + "]");
 +    if (!messageNode) {
-+      dump("HUD_handleNetworkActivity: unknown connection ID!\n");
++      //dump("HUD_handleNetworkActivity: unknown connection ID!\n");
 +      return;
 +    }
 +    messageNode._httpActivity = aMessage;
@@ -3322,9 +3502,17 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    if (messageNode._netPanel) {
 +      messageNode._netPanel.update();
 +    }
++
++    // For unit tests we pass the HTTP activity object to the test callback,
++    // once requests complete.
++    if (HUDService.lastFinishedRequestCallback &&
++        aMessage.meta.stages.indexOf("REQUEST_STOP") > -1 &&
++        aMessage.meta.stages.indexOf("TRANSACTION_CLOSE") > -1) {
++      HUDService.lastFinishedRequestCallback(aMessage);
++    }
 +  },
 +
-   /**
++  /**
     * Make a link given an output element.
     *
     * @param nsIDOMNode aNode
@@ -3347,7 +3535,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      linkNode.setAttribute("aria-haspopup", "true");
  
-@@ -4163,16 +2969,17 @@ HeadsUpDisplay.prototype = {
+@@ -4163,16 +2989,17 @@ HeadsUpDisplay.prototype = {
      }
      if (this.gcliterm) {
        this.gcliterm.destroy();
@@ -3365,7 +3553,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.positionMenuitems.window.removeEventListener("command",
        this._positionConsoleWindow, false);
  
-@@ -5957,17 +4764,17 @@ HeadsUpDisplayUICommands = {
+@@ -5957,17 +4784,17 @@ HeadsUpDisplayUICommands = {
          break;
        }
        case "selectAll": {
@@ -3384,7 +3572,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  //////////////////////////////////////////////////////////////////////////
  // WebConsoleObserver
-@@ -6084,98 +4891,16 @@ CommandController.prototype = {
+@@ -6084,98 +4911,16 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
@@ -3724,7 +3912,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/NetworkPanel.jsm
-@@ -0,0 +1,690 @@
+@@ -0,0 +1,691 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -4277,6 +4465,7 @@ new file mode 100644
 +  /*
 +   * Calls the isDoneCallback function if one is specified.
 +   */
++  // FIXME: is this needed now?
 +  _callIsDone: function() {
 +    if (this.isDoneCallback) {
 +      this.isDoneCallback();
@@ -4310,7 +4499,7 @@ new file mode 100644
 +
 +      case this._DISPLAYED_REQUEST_HEADER:
 +        // Process the request body if there is one.
-+        if (!this.httpActivity.meta.discardResponseBody && request.postData) {
++        if (!this.httpActivity.meta.discardRequestBody && request.postData) {
 +          // Check if we send some form data. If so, display the form data special.
 +          if (this._isRequestBodyFormData) {
 +            this._displayRequestForm();
@@ -4334,15 +4523,15 @@ new file mode 100644
 +        // FALL THROUGH
 +
 +      case this._DISPLAYED_RESPONSE_HEADER:
-+        dump("NetworkPanel update _DISPLAYED_RESPONSE_HEADER stages " + stages + "\n");
++        //dump("NetworkPanel update _DISPLAYED_RESPONSE_HEADER stages " + stages + "\n");
 +        if (stages.indexOf("REQUEST_STOP") == -1 ||
 +            stages.indexOf("TRANSACTION_CLOSE") == -1) {
 +          break;
 +        }
 +
-+        dump("NetworkPanel response.content " + response.content + " " + this.contentType + "\n");
++        //dump("NetworkPanel response.content " + response.content + " " + this.contentType + "\n");
 +        if (response.content) {
-+          dump("NetworkPanel response.content length " + response.content.text.length + "\n");
++          //dump("NetworkPanel response.content length " + response.content.text.length + "\n");
 +        }
 +
 +        this._state = this._TRANSITION_CLOSED;
@@ -4367,7 +4556,7 @@ new file mode 100644
 +          this._callIsDone();
 +        }
 +
-+        dump("NetworkPanel update end\n");
++        //dump("NetworkPanel update end\n");
 +        break;
 +    }
 +  }
@@ -4537,3 +4726,865 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
  
  WebConsoleUtils.l10n = {
    /**
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js b/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js
+@@ -5,47 +5,49 @@
+  *
+  * Contributor(s):
+  *  Mihai Șucan <mihai.sucan@gmail.com>
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-599725-response-headers.sjs";
+ 
+-let lastFinishedRequest = null;
+-
+-function requestDoneCallback(aHttpRequest)
+-{
+-  lastFinishedRequest = aHttpRequest;
+-}
+-
+-function performTest()
++function performTest(lastFinishedRequest)
+ {
+   ok(lastFinishedRequest, "page load was logged");
+ 
+-  let headers = lastFinishedRequest.response.header;
++  function readHeader(aName)
++  {
++    for (let header of headers) {
++      if (header.name == aName) {
++        return header.value;
++      }
++    }
++    return null;
++  }
++
++  let headers = lastFinishedRequest.log.entries[0].response.headers;
+   ok(headers, "we have the response headers");
+-  ok(!headers["Content-Type"], "we do not have the Content-Type header");
+-  ok(headers["Content-Length"] != 60, "Content-Length != 60");
++  ok(!readHeader("Content-Type"), "we do not have the Content-Type header");
++  isnot(readHeader("Content-Length"), 60, "Content-Length != 60");
+ 
+-  lastFinishedRequest = null;
+   HUDService.lastFinishedRequestCallback = null;
+-  finishTest();
++  executeSoon(finishTest);
+ }
+ 
+ function test()
+ {
+   addTab(TEST_URI);
+ 
+   let initialLoad = true;
+ 
+-  browser.addEventListener("load", function () {
++  browser.addEventListener("load", function onLoad() {
+     if (initialLoad) {
+-      openConsole();
+-      HUDService.lastFinishedRequestCallback = requestDoneCallback;
+-      content.location.reload();
++      openConsole(null, function() {
++        HUDService.lastFinishedRequestCallback = performTest;
++        content.location.reload();
++      });
+       initialLoad = false;
+     } else {
+-      browser.removeEventListener("load", arguments.callee, true);
+-      performTest();
++      browser.removeEventListener("load", onLoad, true);
+     }
+   }, true);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js b/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js
+@@ -5,55 +5,44 @@
+  *
+  * Contributor(s):
+  *  Mihai Șucan <mihai.sucan@gmail.com>
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-600183-charset.html";
+ 
+-let lastFinishedRequest = null;
+-
+-function requestDoneCallback(aHttpRequest)
+-{
+-  lastFinishedRequest = aHttpRequest;
+-}
+-
+-function performTest()
++function performTest(lastFinishedRequest)
+ {
+   ok(lastFinishedRequest, "charset test page was loaded and logged");
+ 
+-  let body = lastFinishedRequest.response.body;
++  let body = lastFinishedRequest.log.entries[0].response.content.text;
+   ok(body, "we have the response body");
+ 
+   let chars = "\u7684\u95ee\u5019!"; // 的问候!
+   isnot(body.indexOf("<p>" + chars + "</p>"), -1,
+     "found the chinese simplified string");
+ 
+-  lastFinishedRequest = null;
+-  HUDService.saveRequestAndResponseBodies = false;
+   HUDService.lastFinishedRequestCallback = null;
+-  finishTest();
++  executeSoon(finishTest);
+ }
+ 
+ function test()
+ {
+   addTab("data:text/html;charset=utf-8,Web Console - bug 600183 test");
+ 
+   let initialLoad = true;
+ 
+-  browser.addEventListener("load", function () {
++  browser.addEventListener("load", function onLoad() {
+     if (initialLoad) {
+-      waitForFocus(function() {
+-        openConsole();
++      openConsole(null, function(hud) {
+ 
+-        HUDService.saveRequestAndResponseBodies = true;
+-        HUDService.lastFinishedRequestCallback = requestDoneCallback;
++        hud.saveRequestAndResponseBodies = true;
++        HUDService.lastFinishedRequestCallback = performTest;
+ 
+         content.location = TEST_URI;
+-      }, content);
++      });
+       initialLoad = false;
+     } else {
+-      browser.removeEventListener("load", arguments.callee, true);
+-      performTest();
++      browser.removeEventListener("load", onLoad, true);
+     }
+   }, true);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
+@@ -120,14 +120,14 @@ function tabLoaded() {
+     name: "jsterm output message",
+     validatorFn: function()
+     {
+       return HUD.outputNode.querySelector(".webconsole-msg-output");
+     },
+     successFn: function()
+     {
+       let jstermMessage = HUD.outputNode.querySelector(".webconsole-msg-output");
++      EventUtils.synthesizeMouse(jstermMessage, 2, 2, {});
+       EventUtils.synthesizeMouse(networkLink, 2, 2, {});
+-      EventUtils.synthesizeMouse(jstermMessage, 2, 2, {});
+     },
+     failureFn: finishTest,
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
+@@ -146,18 +146,18 @@ function tabLoaded() {
+     name: "jsterm output message",
+     validatorFn: function()
+     {
+       return HUD.outputNode.querySelector(".webconsole-msg-output");
+     },
+     successFn: function()
+     {
+       let jstermMessage = HUD.outputNode.querySelector(".webconsole-msg-output");
++      EventUtils.synthesizeMouse(jstermMessage, 2, 2, {});
+       EventUtils.synthesizeMouse(networkLink, 2, 2, {});
+-      EventUtils.synthesizeMouse(jstermMessage, 2, 2, {});
+     },
+     failureFn: finishTest,
+   });
+ }
+ 
+ function togglePBAndThen(callback) {
+   function pbObserver(aSubject, aTopic, aData) {
+     if (aTopic != "private-browsing-transition-complete") {
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js b/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
+@@ -8,66 +8,72 @@
+  */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-630733-response-redirect-headers.sjs";
+ 
+ let lastFinishedRequests = {};
+ 
+ function requestDoneCallback(aHttpRequest)
+ {
+-  let status = aHttpRequest.response.status.
+-               replace(/^HTTP\/\d\.\d (\d+).+$/, "$1");
++  let status = aHttpRequest.log.entries[0].response.status;
+   lastFinishedRequests[status] = aHttpRequest;
+ }
+ 
+ function performTest(aEvent)
+ {
+-  HUDService.saveRequestAndResponseBodies = false;
+   HUDService.lastFinishedRequestCallback = null;
+ 
+   ok("301" in lastFinishedRequests, "request 1: 301 Moved Permanently");
+   ok("404" in lastFinishedRequests, "request 2: 404 Not found");
+ 
+-  let headers0 = lastFinishedRequests["301"].response.header;
+-  is(headers0["Content-Type"], "text/html",
++  function readHeader(aName)
++  {
++    for (let header of headers) {
++      if (header.name == aName) {
++        return header.value;
++      }
++    }
++    return null;
++  }
++
++  let headers = lastFinishedRequests["301"].log.entries[0].response.headers;
++  is(readHeader("Content-Type"), "text/html",
+      "we do have the Content-Type header");
+-  is(headers0["Content-Length"], 71, "Content-Length is correct");
+-  is(headers0["Location"], "/redirect-from-bug-630733",
++  is(readHeader("Content-Length"), 71, "Content-Length is correct");
++  is(readHeader("Location"), "/redirect-from-bug-630733",
+      "Content-Length is correct");
+-  is(headers0["x-foobar-bug630733"], "bazbaz",
++  is(readHeader("x-foobar-bug630733"), "bazbaz",
+      "X-Foobar-bug630733 is correct");
+-  let body = lastFinishedRequests["301"].response.body;
++  let body = lastFinishedRequests["301"].log.entries[0].response.content;
+   ok(!body, "body discarded for request 1");
+ 
+-  let headers1 = lastFinishedRequests["404"].response.header;
+-  ok(!headers1["Location"], "no Location header");
+-  ok(!headers1["x-foobar-bug630733"], "no X-Foobar-bug630733 header");
++  headers = lastFinishedRequests["404"].log.entries[0].response.headers;
++  ok(!readHeader("Location"), "no Location header");
++  ok(!readHeader("x-foobar-bug630733"), "no X-Foobar-bug630733 header");
+ 
+-  body = lastFinishedRequests["404"].response.body;
++  body = lastFinishedRequests["404"].log.entries[0].response.content.text;
+   isnot(body.indexOf("404"), -1,
+         "body is correct for request 2");
+ 
+   lastFinishedRequests = null;
+-  finishTest();
++  executeSoon(finishTest);
+ }
+ 
+ function test()
+ {
+   addTab("data:text/html;charset=utf-8,<p>Web Console test for bug 630733");
+ 
+-  browser.addEventListener("load", function(aEvent) {
+-    browser.removeEventListener(aEvent.type, arguments.callee, true);
++  browser.addEventListener("load", function onLoad1(aEvent) {
++    browser.removeEventListener(aEvent.type, onLoad1, true);
+ 
+-    executeSoon(function() {
+-      openConsole();
+-
+-      HUDService.saveRequestAndResponseBodies = true;
++    openConsole(null, function(hud) {
++      hud.saveRequestAndResponseBodies = true;
+       HUDService.lastFinishedRequestCallback = requestDoneCallback;
+ 
+-      browser.addEventListener("load", function(aEvent) {
+-        browser.removeEventListener(aEvent.type, arguments.callee, true);
++      browser.addEventListener("load", function onLoad2(aEvent) {
++        browser.removeEventListener(aEvent.type, onLoad2, true);
+         executeSoon(performTest);
+       }, true);
+ 
+       content.location = TEST_URI;
+     });
+   }, true);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js b/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
+@@ -16,157 +16,153 @@ const TEST_NETWORK_REQUEST_URI = "http:/
+ 
+ const TEST_IMG = "http://example.com/browser/browser/devtools/webconsole/test/test-image.png";
+ 
+ const TEST_DATA_JSON_CONTENT =
+   '{ id: "test JSON data", myArray: [ "foo", "bar", "baz", "biff" ] }';
+ 
+ let lastRequest = null;
+ let requestCallback = null;
++let lastActivity = null;
+ 
+ function test()
+ {
+   addTab("data:text/html;charset=utf-8,Web Console network logging tests");
+ 
+-  browser.addEventListener("load", function() {
+-    browser.removeEventListener("load", arguments.callee, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
+ 
+-    openConsole();
+-
+-    hud = HUDService.getHudByWindow(content);
+-    ok(hud, "Web Console is now open");
++    openConsole(null, function(aHud) {
++      hud = aHud;
++      executeSoon(testPageLoad);
++    });
+ 
+     HUDService.lastFinishedRequestCallback = function(aRequest) {
+-      lastRequest = aRequest;
++      lastRequest = aRequest.log.entries[0];
++      lastActivity = aRequest;
+       if (requestCallback) {
+         requestCallback();
+       }
+     };
+-
+-    executeSoon(testPageLoad);
+   }, true);
+ }
+ 
+ function testPageLoad()
+ {
+-  browser.addEventListener("load", function(aEvent) {
+-    browser.removeEventListener(aEvent.type, arguments.callee, true);
+-
++  requestCallback = function() {
+     // Check if page load was logged correctly.
+     ok(lastRequest, "Page load was logged");
+-    is(lastRequest.url, TEST_NETWORK_REQUEST_URI,
++
++    is(lastRequest.request.url, TEST_NETWORK_REQUEST_URI,
+       "Logged network entry is page load");
+-    is(lastRequest.method, "GET", "Method is correct");
+-    ok(!("body" in lastRequest.request), "No request body was stored");
+-    ok(!("body" in lastRequest.response), "No response body was stored");
+-    ok(!lastRequest.response.listener, "No response listener is stored");
++    is(lastRequest.request.method, "GET", "Method is correct");
++    ok(!lastRequest.request.postData, "No request body was stored");
++    ok(!lastRequest.response.content, "No response body was stored");
+ 
+     lastRequest = null;
++    requestCallback = null;
+     executeSoon(testPageLoadBody);
+-  }, true);
++  };
+ 
+   content.location = TEST_NETWORK_REQUEST_URI;
+ }
+ 
+ function testPageLoadBody()
+ {
+   // Turn on logging of request bodies and check again.
+-  HUDService.saveRequestAndResponseBodies = true;
+-  browser.addEventListener("load", function(aEvent) {
+-    browser.removeEventListener(aEvent.type, arguments.callee, true);
+-
++  hud.saveRequestAndResponseBodies = true;
++  requestCallback = function() {
+     ok(lastRequest, "Page load was logged again");
+-    is(lastRequest.response.body.indexOf("<!DOCTYPE HTML>"), 0,
++    is(lastRequest.response.content.text.indexOf("<!DOCTYPE HTML>"), 0,
+       "Response body's beginning is okay");
+ 
+     lastRequest = null;
++    requestCallback = null;
+     executeSoon(testXhrGet);
+-  }, true);
++  };
+ 
+   content.location.reload();
+ }
+ 
+ function testXhrGet()
+ {
+   requestCallback = function() {
+     ok(lastRequest, "testXhrGet() was logged");
+-    is(lastRequest.method, "GET", "Method is correct");
+-    is(lastRequest.request.body, null, "No request body was sent");
+-    is(lastRequest.response.body, TEST_DATA_JSON_CONTENT,
++    is(lastRequest.request.method, "GET", "Method is correct");
++    ok(!lastRequest.request.postData, "No request body was sent");
++    is(lastRequest.response.content.text, TEST_DATA_JSON_CONTENT,
+       "Response is correct");
+ 
+     lastRequest = null;
+     requestCallback = null;
+     executeSoon(testXhrPost);
+   };
+ 
+   // Start the XMLHttpRequest() GET test.
+   content.wrappedJSObject.testXhrGet();
+ }
+ 
+ function testXhrPost()
+ {
+   requestCallback = function() {
+     ok(lastRequest, "testXhrPost() was logged");
+-    is(lastRequest.method, "POST", "Method is correct");
+-    is(lastRequest.request.body, "Hello world!",
++    is(lastRequest.request.method, "POST", "Method is correct");
++    is(lastRequest.request.postData.text, "Hello world!",
+       "Request body was logged");
+-    is(lastRequest.response.body, TEST_DATA_JSON_CONTENT,
++    is(lastRequest.response.content.text, TEST_DATA_JSON_CONTENT,
+       "Response is correct");
+ 
+     lastRequest = null;
+     requestCallback = null;
+     executeSoon(testFormSubmission);
+   };
+ 
+   // Start the XMLHttpRequest() POST test.
+   content.wrappedJSObject.testXhrPost();
+ }
+ 
+ function testFormSubmission()
+ {
+   // Start the form submission test. As the form is submitted, the page is
+   // loaded again. Bind to the load event to catch when this is done.
+-  browser.addEventListener("load", function(aEvent) {
+-    browser.removeEventListener(aEvent.type, arguments.callee, true);
+-
++  requestCallback = function() {
+     ok(lastRequest, "testFormSubmission() was logged");
+-    is(lastRequest.method, "POST", "Method is correct");
+-    isnot(lastRequest.request.body.
++    is(lastRequest.request.method, "POST", "Method is correct");
++    isnot(lastRequest.request.postData.text.
+       indexOf("Content-Type: application/x-www-form-urlencoded"), -1,
+       "Content-Type is correct");
+-    isnot(lastRequest.request.body.
++    isnot(lastRequest.request.postData.text.
+       indexOf("Content-Length: 20"), -1, "Content-length is correct");
+-    isnot(lastRequest.request.body.
++    isnot(lastRequest.request.postData.text.
+       indexOf("name=foo+bar&age=144"), -1, "Form data is correct");
+-    ok(lastRequest.response.body.indexOf("<!DOCTYPE HTML>") == 0,
++    is(lastRequest.response.content.text.indexOf("<!DOCTYPE HTML>"), 0,
+       "Response body's beginning is okay");
+ 
+     executeSoon(testNetworkPanel);
+-  }, true);
++  };
+ 
+   let form = content.document.querySelector("form");
+   ok(form, "we have the HTML form");
+   form.submit();
+ }
+ 
+ function testNetworkPanel()
+ {
+   // Open the NetworkPanel. The functionality of the NetworkPanel is tested
+   // within separate test files.
+-  let networkPanel = HUDService.openNetworkPanel(hud.filterBox, lastRequest);
+-  is(networkPanel, lastRequest.panels[0].get(),
+-    "Network panel stored on lastRequest object");
++  let networkPanel = HUDService.openNetworkPanel(hud.filterBox, lastActivity);
++  is(networkPanel, hud.filterBox._netPanel,
++     "Network panel stored on anchor node");
+ 
+-  networkPanel.panel.addEventListener("load", function(aEvent) {
+-    networkPanel.panel.removeEventListener(aEvent.type, arguments.callee,
+-      true);
++  networkPanel.panel.addEventListener("load", function onLoad(aEvent) {
++    networkPanel.panel.removeEventListener(aEvent.type, onLoad, true);
+ 
+     ok(true, "NetworkPanel was opened");
+ 
+     // All tests are done. Shutdown.
+     networkPanel.panel.hidePopup();
+     lastRequest = null;
++    lastActivity = null;
+     HUDService.lastFinishedRequestCallback = null;
+     executeSoon(finishTest);
+   }, true);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
+@@ -99,35 +99,48 @@ function checkNodeKeyValue(aPanel, aId, 
+ function testGen() {
+   let filterBox = HUDService.getHudByWindow(content).filterBox;
+ 
+   let tempScope  = {};
+   Cu.import("resource:///modules/WebConsoleUtils.jsm", tempScope);
+   let l10n = tempScope.WebConsoleUtils.l10n;
+   tempScope = null;
+ 
+-  var httpActivity = {
+-    url: "http://www.testpage.com",
+-    method: "GET",
++  let httpActivity = {
++    meta: {
++      stages: [],
++      discardRequestBody: true,
++      discardResponseBody: true,
++    },
++    log: {
++      entries: [{
++        startedDateTime: (new Date()).toISOString(),
++        request: {
++          url: "http://www.testpage.com",
++          method: "GET",
++          cookies: [],
++          headers: [
++            { name: "foo", value: "bar" },
++          ],
++        },
++        response: {
++          headers: [],
++        },
++        timings: {},
++      }],
++    },
++  };
+ 
+-    panels: [],
+-    request: {
+-      header: {
+-        foo: "bar"
+-      }
+-    },
+-    response: { },
+-    timing: {
+-      "REQUEST_HEADER": 0
+-    }
+-  };
++  let entry = httpActivity.log.entries[0];
+ 
+   let networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
+ 
+-  is (networkPanel, httpActivity.panels[0].get(), "Network panel stored on httpActivity object");
++  is(filterBox._netPanel, networkPanel,
++     "Network panel stored on the anchor object");
++
+   networkPanel.panel.addEventListener("load", function onLoad() {
+     networkPanel.panel.removeEventListener("load", onLoad, true);
+     testDriver.next();
+   }, true);
+ 
+   yield;
+ 
+   checkIsVisible(networkPanel, {
+@@ -141,99 +154,111 @@ function testGen() {
+     responseImageCached: false
+   });
+ 
+   checkNodeContent(networkPanel, "header", "http://www.testpage.com");
+   checkNodeContent(networkPanel, "header", "GET");
+   checkNodeKeyValue(networkPanel, "requestHeadersContent", "foo", "bar");
+ 
+   // Test request body.
+-  httpActivity.request.body = "hello world";
++  httpActivity.meta.discardRequestBody = false;
++  entry.request.postData = { text: "hello world" };
+   networkPanel.update();
++
+   checkIsVisible(networkPanel, {
+     requestBody: true,
+     requestFormData: false,
+     requestCookie: false,
+     responseContainer: false,
+     responseBody: false,
+     responseNoBody: false,
+     responseImage: false,
+     responseImageCached: false
+   });
+   checkNodeContent(networkPanel, "requestBodyContent", "hello world");
+ 
+   // Test response header.
+-  httpActivity.timing.RESPONSE_HEADER = 1000;
+-  httpActivity.response.status = "999 earthquake win";
+-  httpActivity.response.header = {
+-    "Content-Type": "text/html",
+-    leaveHouses: "true"
+-  }
++  entry.timings.wait = 10;
++  entry.response.httpVersion = "HTTP/3.14";
++  entry.response.status = 999;
++  entry.response.statusText = "earthquake win";
++  entry.response.contentType = "text/html";
++  entry.response.headers.push(
++    { name: "Content-Type", value: "text/html" },
++    { name: "leaveHouses", value: "true" }
++  );
++
+   networkPanel.update();
++
+   checkIsVisible(networkPanel, {
+     requestBody: true,
+     requestFormData: false,
+     requestCookie: false,
+     responseContainer: true,
+     responseBody: false,
+     responseNoBody: false,
+     responseImage: false,
+     responseImageCached: false
+   });
+ 
+-  checkNodeContent(networkPanel, "header", "999 earthquake win");
++  checkNodeContent(networkPanel, "header", "HTTP/3.14 999 earthquake win");
+   checkNodeKeyValue(networkPanel, "responseHeadersContent", "leaveHouses", "true");
+-  checkNodeContent(networkPanel, "responseHeadersInfo", "1ms");
++  checkNodeContent(networkPanel, "responseHeadersInfo", "10ms");
+ 
+-  httpActivity.timing.RESPONSE_COMPLETE = 2500;
+-  // This is necessary to show that the request is done.
+-  httpActivity.timing.TRANSACTION_CLOSE = 2500;
++  httpActivity.meta.discardResponseBody = false;
++  entry.timings.receive = 2;
+   networkPanel.update();
+ 
+   checkIsVisible(networkPanel, {
+     requestBody: true,
+     requestCookie: false,
+     requestFormData: false,
+     responseContainer: true,
+     responseBody: false,
+     responseNoBody: false,
+     responseImage: false,
+     responseImageCached: false
+   });
+ 
+-  httpActivity.response.isDone = true;
++  httpActivity.meta.stages.push("REQUEST_STOP", "TRANSACTION_CLOSE");
+   networkPanel.update();
+ 
+   checkNodeContent(networkPanel, "responseNoBodyInfo", "2ms");
+   checkIsVisible(networkPanel, {
+     requestBody: true,
+     requestCookie: false,
+     responseContainer: true,
+     responseBody: false,
+     responseNoBody: true,
+     responseImage: false,
+     responseImageCached: false
+   });
+ 
+   networkPanel.panel.hidePopup();
+ 
+   // Second run: Test for cookies and response body.
+-  httpActivity.request.header.Cookie = "foo=bar;  hello=world";
+-  httpActivity.response.body = "get out here";
++  entry.request.cookies.push(
++    { name: "foo", value: "bar" },
++    { name: "hello", value: "world" }
++  );
++  entry.response.content = {
++    text: "get out here",
++  };
+ 
+   networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
+-  is (networkPanel, httpActivity.panels[1].get(), "Network panel stored on httpActivity object");
++  is(filterBox._netPanel, networkPanel,
++     "Network panel stored on httpActivity object");
++
+   networkPanel.panel.addEventListener("load", function onLoad() {
+     networkPanel.panel.removeEventListener("load", onLoad, true);
+     testDriver.next();
+   }, true);
+ 
+   yield;
+ 
+-
+   checkIsVisible(networkPanel, {
+     requestBody: true,
+     requestFormData: false,
+     requestCookie: true,
+     responseContainer: true,
+     responseBody: true,
+     responseNoBody: false,
+     responseImage: false,
+@@ -243,18 +268,19 @@ function testGen() {
+   checkNodeKeyValue(networkPanel, "requestCookieContent", "foo", "bar");
+   checkNodeKeyValue(networkPanel, "requestCookieContent", "hello", "world");
+   checkNodeContent(networkPanel, "responseBodyContent", "get out here");
+   checkNodeContent(networkPanel, "responseBodyInfo", "2ms");
+ 
+   networkPanel.panel.hidePopup();
+ 
+   // Check image request.
+-  httpActivity.response.header["Content-Type"] = "image/png";
+-  httpActivity.url = TEST_IMG;
++  entry.response.headers[1].value = "image/png";
++  entry.response.contentType = "image/png";
++  entry.request.url = TEST_IMG;
+ 
+   networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
+   networkPanel.panel.addEventListener("load", function onLoad() {
+     networkPanel.panel.removeEventListener("load", onLoad, true);
+     testDriver.next();
+   }, true);
+ 
+   yield;
+@@ -290,17 +316,19 @@ function testGen() {
+     yield;
+   }
+   else {
+     checkImageResponseInfo();
+     networkPanel.panel.hidePopup();
+   }
+ 
+   // Check cached image request.
+-  httpActivity.response.status = "HTTP/1.1 304 Not Modified";
++  entry.response.httpVersion = "HTTP/1.1";
++  entry.response.status = 304;
++  entry.response.statusText = "Not Modified";
+ 
+   networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
+   networkPanel.panel.addEventListener("load", function onLoad() {
+     networkPanel.panel.removeEventListener("load", onLoad, true);
+     testDriver.next();
+   }, true);
+ 
+   yield;
+@@ -317,21 +345,21 @@ function testGen() {
+   });
+ 
+   let imgNode = networkPanel.document.getElementById("responseImageCachedNode");
+   is(imgNode.getAttribute("src"), TEST_IMG, "Displayed image is correct");
+ 
+   networkPanel.panel.hidePopup();
+ 
+   // Test sent form data.
+-  httpActivity.request.body = [
+-    "Content-Type:      application/x-www-form-urlencoded\n" +
+-    "Content-Length: 59\n" +
++  entry.request.postData.text = [
++    "Content-Type:      application/x-www-form-urlencoded",
++    "Content-Length: 59",
+     "name=rob&age=20"
+-  ].join("");
++  ].join("\n");
+ 
+   networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
+   networkPanel.panel.addEventListener("load", function onLoad() {
+     networkPanel.panel.removeEventListener("load", onLoad, true);
+     testDriver.next();
+   }, true);
+ 
+   yield;
+@@ -347,17 +375,17 @@ function testGen() {
+     responseImageCached: true
+   });
+ 
+   checkNodeKeyValue(networkPanel, "requestFormDataContent", "name", "rob");
+   checkNodeKeyValue(networkPanel, "requestFormDataContent", "age", "20");
+   networkPanel.panel.hidePopup();
+ 
+   // Test no space after Content-Type:
+-  httpActivity.request.body = "Content-Type:application/x-www-form-urlencoded\n";
++  entry.request.postData.text = "Content-Type:application/x-www-form-urlencoded\n";
+ 
+   networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
+   networkPanel.panel.addEventListener("load", function onLoad() {
+     networkPanel.panel.removeEventListener("load", onLoad, true);
+     testDriver.next();
+   }, true);
+ 
+   yield;
+@@ -372,29 +400,39 @@ function testGen() {
+     responseImage: false,
+     responseImageCached: true
+   });
+ 
+   networkPanel.panel.hidePopup();
+ 
+   // Test cached data.
+ 
++  /*
++  // XXX: for reviewer: this is no longer valid since the Network Panel no
++  // longer shows cached responses. Additionally, even if it would, it's no
++  // longer up to the network panel to load the cached URL. I was really
++  // surprised by this code and the "magic" response.body that shows up.
++  // If you consider appropriate I can add a loadFromCache() call in
++  // HUDService-content NetworkMonitor code to send the cached response for
++  // status 304. Thoughts?
++
+   // Load a Latin-1 encoded page.
+   browser.addEventListener("load", function onLoad () {
+     browser.removeEventListener("load", onLoad, true);
+     httpActivity.charset = content.document.characterSet;
+     testDriver.next();
+   }, true);
+-  browser.contentWindow.wrappedJSObject.document.location = TEST_ENCODING_ISO_8859_1;
++  content.location = TEST_ENCODING_ISO_8859_1;
+ 
+   yield;
+ 
+-  httpActivity.url = TEST_ENCODING_ISO_8859_1;
+-  httpActivity.response.header["Content-Type"] = "application/json";
+-  httpActivity.response.body = "";
++  entry.request.url = TEST_ENCODING_ISO_8859_1;
++  entry.response.headers[1].value = "application/json";
++  entry.response.contentType = "application/json";
++  entry.response.content.text = "";
+ 
+   networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
+   networkPanel.isDoneCallback = function NP_doneCallback() {
+     networkPanel.isDoneCallback = null;
+     testDriver.next();
+   }
+ 
+   yield;
+@@ -407,30 +445,30 @@ function testGen() {
+     responseBody: false,
+     responseBodyCached: true,
+     responseNoBody: false,
+     responseImage: false,
+     responseImageCached: false
+   });
+ 
+   checkNodeContent(networkPanel, "responseBodyCachedContent", "<body>\u00fc\u00f6\u00E4</body>");
+-  networkPanel.panel.hidePopup();
++  return;
++
++  networkPanel.panel.hidePopup(); */
+ 
+   // Test a response with a content type that can't be displayed in the
+   // NetworkPanel.
+-  httpActivity.response.header["Content-Type"] = "application/x-shockwave-flash";
++  entry.response.headers[1].value = "application/x-shockwave-flash";
++  entry.response.contentType = "application/x-shockwave-flash";
+ 
+   networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
+-  networkPanel.isDoneCallback = function NP_doneCallback() {
+-    networkPanel.isDoneCallback = null;
+-    try {
+-      testDriver.next();
+-    } catch (e if e instanceof StopIteration) {
+-    }
+-  }
++  networkPanel.panel.addEventListener("load", function onLoad() {
++    networkPanel.panel.removeEventListener("load", onLoad, true);
++    testDriver.next();
++  }, true);
+ 
+   yield;
+ 
+   checkIsVisible(networkPanel, {
+     requestBody: false,
+     requestFormData: true,
+     requestCookie: true,
+     responseContainer: true,
+@@ -484,9 +522,11 @@ function testGen() {
+   else
+     ok(true, "Flash not installed");
+ 
+   networkPanel.panel.hidePopup(); */
+ 
+   // All done!
+   testDriver = null;
+   executeSoon(finishTest);
++
++  yield;
+ }
