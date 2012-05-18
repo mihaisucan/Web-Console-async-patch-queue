@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 9309d42cfe54701352fcea852390430ae22e0a13
+# Parent 985058b05905b2e3e3adbf1668f363b8ac3231e4
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1336768173 -10800
+# Date 1337285677 -10800
 
-Bug 673148 - (async-webconsole) Part 3 - Make JS evaluation and object inspection async; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
+Bug 673148 - (async-webconsole) Part 3 - Make JS evaluation and object inspection async
 
 diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratchpad/scratchpad.js
 --- a/browser/devtools/scratchpad/scratchpad.js
@@ -2725,11 +2725,11 @@ diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconso
  		NetworkHelper.jsm \
  		AutocompletePopup.jsm \
  		WebConsoleUtils.jsm \
- 		gcli.jsm \
- 		GcliCommands.jsm \
- 		GcliTiltCommands.jsm \
  		$(NULL)
  
+ EXTRA_PP_JS_MODULES = \
+ 		HUDService.jsm \
+ 		$(NULL)
 diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/webconsole/PropertyPanel.jsm
 --- a/browser/devtools/webconsole/PropertyPanel.jsm
 +++ b/browser/devtools/webconsole/PropertyPanel.jsm
