@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 985058b05905b2e3e3adbf1668f363b8ac3231e4
+# Parent 6199ba8e3cd0259f16dc523e639f061519cc3425
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1337285677 -10800
+# Date 1337612394 -10800
 
 Bug 673148 - (async-webconsole) Part 3 - Make JS evaluation and object inspection async
 
 diff --git a/browser/devtools/scratchpad/scratchpad.js b/browser/devtools/scratchpad/scratchpad.js
 --- a/browser/devtools/scratchpad/scratchpad.js
 +++ b/browser/devtools/scratchpad/scratchpad.js
-@@ -519,30 +519,31 @@ var Scratchpad = {
+@@ -482,30 +482,31 @@ var Scratchpad = {
      // button to the panel so that the evalString can be reexecuted to update
      // the content of the panel.
      if (aEvalString !== null) {
@@ -645,7 +645,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -52,20 +52,16 @@ const Cu = Components.utils;
+@@ -11,20 +11,16 @@ const Cu = Components.utils;
  const CONSOLEAPI_CLASS_ID = "{b49c18f8-3379-4fc0-8c90-d7772c1a9ff3}";
  
  Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -666,7 +666,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
                                     "@mozilla.org/mime;1",
                                     "nsIMIMEService");
  
-@@ -93,34 +89,24 @@ XPCOMUtils.defineLazyGetter(this, "NetUt
+@@ -52,34 +48,24 @@ XPCOMUtils.defineLazyGetter(this, "NetUt
  
  XPCOMUtils.defineLazyGetter(this, "template", function () {
    var obj = {};
@@ -705,7 +705,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    try {
      Cu.import("resource:///modules/AutocompletePopup.jsm", obj);
    }
-@@ -136,22 +122,16 @@ XPCOMUtils.defineLazyGetter(this, "Scrat
+@@ -95,22 +81,16 @@ XPCOMUtils.defineLazyGetter(this, "Scrat
      Cu.import("resource:///modules/devtools/scratchpad-manager.jsm", obj);
    }
    catch (err) {
@@ -728,7 +728,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  XPCOMUtils.defineLazyGetter(this, "l10n", function() {
    return WebConsoleUtils.l10n;
-@@ -1778,19 +1758,16 @@ HUD_SERVICE.prototype =
+@@ -1737,19 +1717,16 @@ HUD_SERVICE.prototype =
     */
    unregisterDisplay: function HS_unregisterDisplay(aHUDId)
    {
@@ -748,7 +748,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Make sure that the console panel does not try to call
      // deactivateHUDForContext() again.
-@@ -1805,20 +1782,16 @@ HUD_SERVICE.prototype =
+@@ -1764,20 +1741,16 @@ HUD_SERVICE.prototype =
      }
  
      hud.HUDBox.parentNode.removeChild(hud.HUDBox);
@@ -769,7 +769,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        }
      }
  
-@@ -1851,17 +1824,17 @@ HUD_SERVICE.prototype =
+@@ -1810,17 +1783,17 @@ HUD_SERVICE.prototype =
    {
      if (Object.keys(this.hudReferences).length > 0) {
        return;
@@ -788,7 +788,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @returns void
     */
-@@ -1875,17 +1848,17 @@ HUD_SERVICE.prototype =
+@@ -1834,17 +1807,17 @@ HUD_SERVICE.prototype =
  
      this.openRequests = {};
      this.openResponseHeaders = {};
@@ -807,7 +807,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @returns void
     */
    shutdown: function HS_shutdown()
-@@ -2443,39 +2416,16 @@ HUD_SERVICE.prototype =
+@@ -2402,39 +2375,16 @@ HUD_SERVICE.prototype =
                                                       null,
                                                       clipboardText);
  
@@ -847,7 +847,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    createSequencer: function HS_createSequencer(aInt)
    {
      function sequencer(aInt)
-@@ -2483,41 +2433,16 @@ HUD_SERVICE.prototype =
+@@ -2442,41 +2392,16 @@ HUD_SERVICE.prototype =
        while(1) {
          aInt++;
          yield aInt;
@@ -889,7 +889,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    onTabClose: function HS_onTabClose(aEvent)
    {
-@@ -2926,30 +2851,25 @@ function HeadsUpDisplay(aConfig)
+@@ -2885,30 +2810,25 @@ function HeadsUpDisplay(aConfig)
    this.messageManager = this.browser.messageManager;
  
    // Track callback functions registered for specific async requests sent to the
@@ -926,7 +926,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    this._setupMessageManager();
  }
  
-@@ -2957,17 +2877,19 @@ HeadsUpDisplay.prototype = {
+@@ -2916,17 +2836,19 @@ HeadsUpDisplay.prototype = {
    /**
     * Message names that the HUD listens for. These messages come from the remote
     * Web Console content script.
@@ -947,7 +947,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    groupDepth: 0,
  
-@@ -3281,20 +3203,18 @@ HeadsUpDisplay.prototype = {
+@@ -3240,20 +3162,18 @@ HeadsUpDisplay.prototype = {
      let usegcli = false;
      try {
        // usegcli = Services.prefs.getBoolPref("devtools.gcli.enable");
@@ -970,7 +970,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        }
      }
      else {
-@@ -3356,25 +3276,20 @@ HeadsUpDisplay.prototype = {
+@@ -3315,25 +3235,20 @@ HeadsUpDisplay.prototype = {
      this.contentWindow = aContentWindow;
      this.contentDocument = this.contentWindow.document;
      this.uriSpec = this.contentWindow.location.href;
@@ -998,7 +998,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Shortcut to make XUL nodes
     *
     * @param string aTag
-@@ -3968,17 +3883,17 @@ HeadsUpDisplay.prototype = {
+@@ -3927,17 +3842,17 @@ HeadsUpDisplay.prototype = {
            return;
          }
  
@@ -1017,7 +1017,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      if (level == "dir") {
        // Initialize the inspector message node, by setting the PropertyTreeView
-@@ -4091,19 +4006,27 @@ HeadsUpDisplay.prototype = {
+@@ -4050,19 +3965,27 @@ HeadsUpDisplay.prototype = {
    {
      if (!aMessage.json || aMessage.json.hudId != this.hudId) {
        Cu.reportError("JSTerm: received message " + aMessage.name +
@@ -1045,7 +1045,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          break;
        case "WebConsole:CachedMessages":
          this._displayCachedConsoleMessages(aMessage.json.messages);
-@@ -4224,17 +4147,17 @@ HeadsUpDisplay.prototype = {
+@@ -4183,17 +4106,17 @@ HeadsUpDisplay.prototype = {
    },
  
    /**
@@ -1064,7 +1064,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      if (this.jsterm) {
        this.jsterm.destroy();
      }
-@@ -4281,559 +4204,63 @@ function NodeFactory(aFactoryType, ignor
+@@ -4240,559 +4163,63 @@ function NodeFactory(aFactoryType, ignor
        return aDocument.createElement(aTag);
      }
    }
@@ -1636,7 +1636,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this._inputEventHandler = this.inputEventHandler.bind(this);
  
      this.inputNode.addEventListener("keypress",
-@@ -4854,203 +4281,136 @@ JSTerm.prototype = {
+@@ -4813,203 +4240,136 @@ JSTerm.prototype = {
      this.mixins.generateUI();
    },
  
@@ -1922,7 +1922,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      if (aOptions.updateButtonCallback) {
        buttons.push({
-@@ -5060,100 +4420,93 @@ JSTerm.prototype = {
+@@ -5019,100 +4379,93 @@ JSTerm.prototype = {
        });
      }
  
@@ -2069,7 +2069,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @param boolean aClearStorage
     *        True if you want to clear the console messages storage associated to
     *        this Web Console.
-@@ -5434,17 +4787,17 @@ JSTerm.prototype = {
+@@ -5393,17 +4746,17 @@ JSTerm.prototype = {
    // Stores the data for the last completion.
    lastCompletion: null,
  
@@ -2088,7 +2088,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *          cursor position to the end of the completed text.
     *          If there is only one possible completion, then this completion
     *          value is used and the cursor is put at the end of the completion.
-@@ -5452,103 +4805,178 @@ JSTerm.prototype = {
+@@ -5411,103 +4764,178 @@ JSTerm.prototype = {
     *          value stayed the same as the last time the function was called,
     *          then the previous completion of all possible completions is used.
     *    - this.COMPLETE_HINT_ONLY: If there is more than one possible
@@ -2307,7 +2307,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Accept the proposed input completion.
-@@ -5557,17 +4985,17 @@ JSTerm.prototype = {
+@@ -5516,17 +4944,17 @@ JSTerm.prototype = {
     *         True if there was a selected completion item and the input value
     *         was updated, false otherwise.
     */
@@ -2326,7 +2326,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      this.clearCompletion();
  
-@@ -5591,18 +5019,17 @@ JSTerm.prototype = {
+@@ -5550,18 +4978,17 @@ JSTerm.prototype = {
     * Clear the object cache from the Web Console content instance.
     *
     * @param string aCacheId
@@ -2346,7 +2346,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * received from the Web Console content instance.
     *
     * @param string aCacheId
-@@ -5619,55 +5046,198 @@ JSTerm.prototype = {
+@@ -5578,55 +5005,198 @@ JSTerm.prototype = {
    function JST_remoteObjectProvider(aCacheId, aObjectId, aResultCacheId,
                                      aCallback) {
      let message = {
@@ -2555,7 +2555,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.textFactory = NodeFactory("text", "xul", aParentNode.ownerDocument);
      this.generateUI();
      this.attachUI();
-@@ -5930,17 +5500,17 @@ ConsoleUtils = {
+@@ -5889,17 +5459,17 @@ ConsoleUtils = {
        tree.appendChild(treecols);
  
        tree.appendChild(aDocument.createElement("treechildren"));
@@ -2574,7 +2574,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          remoteObjectProvider: body.remoteObjectProvider,
        };
  
-@@ -6167,18 +5737,21 @@ ConsoleUtils = {
+@@ -6126,18 +5696,21 @@ ConsoleUtils = {
    /**
     * Filters a node appropriately, then sends it to the output, regrouping and
     * pruning output as necessary.
@@ -2598,7 +2598,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let isRepeated = false;
      if (aNode.classList.contains("webconsole-msg-cssparser")) {
        isRepeated = this.filterRepeatedCSS(aNode, outputNode, aHUDId);
-@@ -6187,17 +5760,17 @@ ConsoleUtils = {
+@@ -6146,17 +5719,17 @@ ConsoleUtils = {
      if (!isRepeated &&
          (aNode.classList.contains("webconsole-msg-console") ||
           aNode.classList.contains("webconsole-msg-exception") ||
@@ -2617,7 +2617,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        // We can't very well scroll to make the message node visible if the log
        // limit is zero and the node was destroyed in the first place.
        return;
-@@ -6389,86 +5962,46 @@ HeadsUpDisplayUICommands = {
+@@ -6348,86 +5921,46 @@ HeadsUpDisplayUICommands = {
        }
        case "saveBodies": {
          let checked = aButton.getAttribute("checked") === "true";
@@ -2712,7 +2712,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
 --- a/browser/devtools/webconsole/Makefile.in
 +++ b/browser/devtools/webconsole/Makefile.in
-@@ -41,17 +41,16 @@ DEPTH		= ../../..
+@@ -7,17 +7,16 @@ DEPTH		= ../../..
  topsrcdir	= @top_srcdir@
  srcdir		= @srcdir@
  VPATH		= @srcdir@
@@ -2733,30 +2733,12 @@ diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconso
 diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/webconsole/PropertyPanel.jsm
 --- a/browser/devtools/webconsole/PropertyPanel.jsm
 +++ b/browser/devtools/webconsole/PropertyPanel.jsm
-@@ -18,433 +18,311 @@
-  * The Initial Developer of the Original Code is
-  * the Mozilla Foundation.
-  * Portions created by the Initial Developer are Copyright (C) 2010
-  * the Initial Developer. All Rights Reserved.
-  *
-  * Contributor(s):
-  *   Rob Campbell <rcampbell@mozilla.com>
-  *   Julian Viereck <jviereck@mozilla.com>
-+ *   Mihai Sucan <mihai.sucan@gmail.com>
-  *
-  * Alternatively, the contents of this file may be used under the terms of
-  * either the GNU General Public License Version 2 or later (the "GPL"), or
-  * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-  * in which case the provisions of the GPL or the LGPL are applicable instead
-  * of those above. If you wish to allow use of your version of this file only
-  * under the terms of either the GPL or the LGPL, and not to allow others to
-  * use your version of this file under the terms of the MPL, indicate your
-  * decision by deleting the provisions above and replace them with the notice
-  * and other provisions required by the GPL or the LGPL. If you do not delete
-  * the provisions above, a recipient may use your version of this file under
-  * the terms of any one of the MPL, the GPL or the LGPL.
-  *
-  * ***** END LICENSE BLOCK ***** */
+@@ -1,416 +1,293 @@
+ /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+ /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
 +"use strict";
 +
@@ -3337,7 +3319,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
    cycleHeader: function(col, elem) { },
    selectionChanged: function() { },
    cycleCell: function(idx, column) { },
-@@ -453,17 +331,31 @@ PropertyTreeView.prototype = {
+@@ -419,17 +296,31 @@ PropertyTreeView.prototype = {
    performActionOnRow: function(action, row) { },
    getRowProperties: function(idx, column, prop) { },
    getCellProperties: function(idx, column, prop) { },
@@ -3370,7 +3352,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
  /**
   * Creates a DOMNode and sets all the attributes of aAttributes on the created
   * element.
-@@ -506,74 +398,76 @@ function appendChild(aDocument, aParent,
+@@ -472,74 +363,76 @@ function appendChild(aDocument, aParent,
  }
  
  ///////////////////////////////////////////////////////////////////////////
@@ -3460,7 +3442,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
    this.treeView = new PropertyTreeView();
    this.treeView.data = aObject;
  
-@@ -588,25 +482,20 @@ function PropertyPanel(aParent, aDocumen
+@@ -554,25 +447,20 @@ function PropertyPanel(aParent, aDocumen
    this.panel.addEventListener("popuphidden", function onPopupHide()
    {
      self.panel.removeEventListener("popuphidden", onPopupHide, false);
@@ -4310,9 +4292,9 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
-@@ -36,40 +36,40 @@
-  *
-  * ***** END LICENSE BLOCK ***** */
+@@ -3,40 +3,40 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  const TEST_URI = "data:text/html;charset=utf-8,<p>bug 585991 - autocomplete popup keyboard usage test";
  let HUD;
@@ -4359,7 +4341,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_auto
      let sameItems = popup.getItems();
      is(sameItems.every(function(aItem, aIndex) {
        return aItem.label == "item" + aIndex;
-@@ -107,43 +107,43 @@ function tabLoaded() {
+@@ -74,43 +74,43 @@ function tabLoaded() {
  
  function autocompletePopupHidden()
  {
@@ -4408,7 +4390,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_auto
  
        ok(!completeNode.value, "completeNode is empty");
  
-@@ -163,18 +163,18 @@ function autocompletePopupHidden()
+@@ -130,18 +130,18 @@ function autocompletePopupHidden()
  
  function testReturnKey()
  {
@@ -4429,7 +4411,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_auto
      is(popup.selectedIndex, -1, "no index is selected");
      EventUtils.synthesizeKey("VK_DOWN", {});
  
-@@ -185,18 +185,18 @@ function testReturnKey()
+@@ -152,18 +152,18 @@ function testReturnKey()
      is(completeNode.value, prefix + "item0", "completeNode.value holds item0");
  
      EventUtils.synthesizeKey("VK_DOWN", {});
@@ -4742,10 +4724,10 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
-@@ -35,22 +35,23 @@
-  * the terms of any one of the MPL, the GPL or the LGPL.
-  *
-  * ***** END LICENSE BLOCK ***** */
+@@ -2,22 +2,23 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
  
@@ -4771,7 +4753,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_clos
  
    let hudId = HUDService.getHudIdByWindow(content);
    let HUD = HUDService.hudReferences[hudId];
-@@ -58,19 +59,16 @@ function tabLoaded() {
+@@ -25,19 +26,16 @@ function tabLoaded() {
    HUD.jsterm.execute("document");
  
    let networkMessage = HUD.outputNode.querySelector(".webconsole-msg-network");
@@ -4791,7 +4773,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_clos
  
    let onpopupshown = function() {
      popupsShown++;
-@@ -113,11 +111,23 @@ function tabLoaded() {
+@@ -80,11 +78,23 @@ function tabLoaded() {
  
    registerCleanupFunction(function() {
      is(popupsShown, 2, "correct number of popups shown");
@@ -4820,7 +4802,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_clos
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
-@@ -74,19 +74,16 @@ function tabLoaded() {
+@@ -41,19 +41,16 @@ function tabLoaded() {
    HUD.jsterm.execute("document");
  
    let networkMessage = HUD.outputNode.querySelector(".webconsole-msg-network");
@@ -4840,7 +4822,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_priv
  
    let onpopupshown = function() {
      popupsShown++;
-@@ -140,18 +137,30 @@ function tabLoaded() {
+@@ -107,18 +104,30 @@ function tabLoaded() {
    registerCleanupFunction(function() {
      is(popupsShown, 2, "correct number of popups shown");
      if (popupsShown != 2) {
@@ -5028,10 +5010,10 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_gett
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
-@@ -35,103 +35,123 @@
-  * the terms of any one of the MPL, the GPL or the LGPL.
-  *
-  * ***** END LICENSE BLOCK ***** */
+@@ -2,103 +2,123 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-632347-iterators-generators.html";
  
@@ -5503,12 +5485,11 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_docu
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
-@@ -35,21 +35,19 @@
-  * and other provisions required by the GPL or the LGPL. If you do not delete
-  * the provisions above, a recipient may use your version of this file under
-  * the terms of any one of the MPL, the GPL or the LGPL.
-  *
-  * ***** END LICENSE BLOCK ***** */
+@@ -1,20 +1,18 @@
+ /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  // Tests that the $0 console helper works as intended.
  
@@ -5526,7 +5507,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_high
    let p3 = doc.createElement("p");
    doc.title = "Inspector Tree Selection Test";
    h1.textContent = "Inspector Tree Selection Test";
-@@ -74,74 +72,104 @@ function createDocument()
+@@ -39,74 +37,104 @@ function createDocument()
    div2.appendChild(p3);
    doc.body.appendChild(div);
    doc.body.appendChild(div2);
@@ -5644,11 +5625,11 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_high
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_chrome.js b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_chrome.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
-@@ -36,21 +36,20 @@
-  * the provisions above, a recipient may use your version of this file under
-  * the terms of any one of the MPL, the GPL or the LGPL.
-  *
-  * ***** END LICENSE BLOCK ***** */
+@@ -1,21 +1,20 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  // Tests that code completion works properly.
  
@@ -5670,7 +5651,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_chrome.js b/bro
    
    ok(hud.HUDBox, "we have the console display");
  
-@@ -58,15 +57,14 @@ function testChrome(hud) {
+@@ -23,15 +22,14 @@ function testChrome(hud) {
    ok(jsterm, "we have a jsterm");
  
    let input = jsterm.inputNode;
@@ -5693,12 +5674,11 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_chrome.js b/bro
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_completion.js b/browser/devtools/webconsole/test/browser_webconsole_completion.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_completion.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_completion.js
-@@ -35,74 +35,98 @@
-  * and other provisions required by the GPL or the LGPL. If you do not delete
-  * the provisions above, a recipient may use your version of this file under
-  * the terms of any one of the MPL, the GPL or the LGPL.
-  *
-  * ***** END LICENSE BLOCK ***** */
+@@ -1,73 +1,97 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  // Tests that code completion works properly.
  
@@ -5867,7 +5847,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_consoleonpage.j
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
-@@ -49,22 +49,32 @@ function test() {
+@@ -14,22 +14,32 @@ function test() {
      openConsole(null, testExecutionScope);
    }, true);
  }
@@ -5962,7 +5942,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_for_of.js b/bro
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js b/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
-@@ -40,43 +40,43 @@
+@@ -5,43 +5,43 @@
  
  // Tests that the correct CSS styles are applied to the lines of console
  // output.
@@ -6031,12 +6011,11 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_js_input_and_ou
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
-@@ -36,123 +36,193 @@
-  * and other provisions required by the GPL or the LGPL. If you do not delete
-  * the provisions above, a recipient may use your version of this file under
-  * the terms of any one of the MPL, the GPL or the LGPL.
-  *
-  * ***** END LICENSE BLOCK ***** */
+@@ -1,122 +1,192 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
  
@@ -6254,7 +6233,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/bro
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js b/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
-@@ -53,22 +53,45 @@ function test() {
+@@ -18,22 +18,45 @@ function test() {
  
  function testNullAndUndefinedOutput(hud) {
    let jsterm = hud.jsterm;
@@ -6312,7 +6291,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_null_and_undefi
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_order.js b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_output_order.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
-@@ -66,15 +66,14 @@ function testOutputOrder(hud) {
+@@ -31,15 +31,14 @@ function testOutputOrder(hud) {
      },
      successFn: function()
      {
@@ -6332,11 +6311,11 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_order.js
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_panel.js b/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
-@@ -36,61 +36,68 @@
-  * the provisions above, a recipient may use your version of this file under
-  * the terms of any one of the MPL, the GPL or the LGPL.
-  *
-  * ***** END LICENSE BLOCK ***** */
+@@ -1,61 +1,68 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  // Tests the functionality of the "property panel", which allows JavaScript
  // objects and DOM nodes to be inspected.
@@ -6441,11 +6420,11 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_panel.
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_provider.js b/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
-@@ -36,48 +36,42 @@
-  * the provisions above, a recipient may use your version of this file under
-  * the terms of any one of the MPL, the GPL or the LGPL.
-  *
-  * ***** END LICENSE BLOCK ***** */
+@@ -1,48 +1,42 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  // Tests the property provider, which is part of the code completion
  // infrastructure.
@@ -6504,7 +6483,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_provid
 diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 --- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 +++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
-@@ -182,8 +182,14 @@ timerStarted=%S: timer started
+@@ -186,8 +186,14 @@ timerStarted=%S: timer started
  timeEnd=%1$S: %2$Sms
  
  # LOCALIZATION NOTE (Autocomplete.blank):

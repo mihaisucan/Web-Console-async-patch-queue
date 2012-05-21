@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent e8c0efdeeb3dab6b436dbddf6281e77df86f6b56
+# Parent 97bb5d2f3b8d77c73e598b15831f20255ff16138
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1337371762 -10800
+# Date 1337626420 -10800
 
 Bug 673148 - (async-webconsole) Part 5 - HUDService.jsm cleanup
 
@@ -294,7 +294,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -55,48 +55,25 @@ Cu.import("resource://gre/modules/XPCOMU
+@@ -14,48 +14,25 @@ Cu.import("resource://gre/modules/XPCOMU
  Cu.import("resource://gre/modules/Services.jsm");
  
  var EXPORTED_SYMBOLS = ["HUDService", "ConsoleUtils"];
@@ -343,7 +343,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  XPCOMUtils.defineLazyGetter(this, "l10n", function() {
    return WebConsoleUtils.l10n;
-@@ -336,46 +313,25 @@ function pruneConsoleOutputIfNecessary(a
+@@ -295,46 +272,25 @@ function pruneConsoleOutputIfNecessary(a
    return logLimit;
  }
  
@@ -390,7 +390,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Keeps a reference for each HeadsUpDisplay that is created
     */
    this.hudReferences = {};
-@@ -394,158 +350,98 @@ HUD_SERVICE.prototype =
+@@ -353,158 +309,98 @@ HUD_SERVICE.prototype =
  
    /**
     * The sequencer is a generator (after initialization) that returns unique
@@ -601,7 +601,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @returns integer
     */
    sequenceId: function HS_sequencerId()
-@@ -734,25 +630,16 @@ HUD_SERVICE.prototype =
+@@ -693,25 +589,16 @@ HUD_SERVICE.prototype =
          node.classList.add("hud-filtered-by-string");
        }
      }
@@ -627,7 +627,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    {
      // register a display DOM node Id with the service.
      if (!aHUDId){
-@@ -781,19 +668,16 @@ HUD_SERVICE.prototype =
+@@ -740,19 +627,16 @@ HUD_SERVICE.prototype =
     */
    unregisterDisplay: function HS_unregisterDisplay(aHUDId)
    {
@@ -647,7 +647,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      for (let i = 0; i < panels.length; i++) {
        panels[i].hidePopup();
      }
-@@ -815,24 +699,16 @@ HUD_SERVICE.prototype =
+@@ -774,24 +658,16 @@ HUD_SERVICE.prototype =
      hud.HUDBox.parentNode.removeChild(hud.HUDBox);
  
      if (hud.splitter.parentNode) {
@@ -672,7 +672,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        }
  
        this.suspend();
-@@ -864,33 +740,34 @@ HUD_SERVICE.prototype =
+@@ -823,24 +699,24 @@ HUD_SERVICE.prototype =
    {
      delete this.defaultFilterPrefs;
      delete this.lastFinishedRequestCallback;
@@ -700,17 +700,62 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param nsIDOMWindow aContentWindow
     * @returns object
+@@ -855,44 +731,40 @@ HUD_SERVICE.prototype =
+    * Returns the hudId that is corresponding to the hud activated for the
+    * passed aContentWindow. If there is no matching hudId null is returned.
+    *
+    * @param nsIDOMWindow aContentWindow
+    * @returns string or null
     */
-+  // FIXME; this no longer works!
-   getHudByWindow: function HS_getHudByWindow(aContentWindow)
+   getHudIdByWindow: function HS_getHudIdByWindow(aContentWindow)
    {
-     let hudId = this.getHudIdByWindow(aContentWindow);
-     return hudId ? this.hudReferences[hudId] : null;
+-    let windowId = WebConsoleUtils.getOuterWindowId(aContentWindow);
+-    return this.getHudIdByWindowId(windowId);
++    let window = this.currentContext();
++    let index =
++      window.gBrowser.getBrowserIndexForDocument(aContentWindow.document);
++    if (index == -1) {
++      return null;
++    }
++
++    let tab = window.gBrowser.tabs[index];
++    let hudId = "hud_" + tab.linkedPanel;
++    return hudId in this.hudReferences ? hudId : null;
    },
  
    /**
-    * Returns the hudId that is corresponding to the hud activated for the
-@@ -1096,123 +973,25 @@ HUD_SERVICE.prototype =
+    * Returns the hudReference for a given id.
+    *
+    * @param string aId
+    * @returns Object
+    */
+   getHudReferenceById: function HS_getHudReferenceById(aId)
+   {
+     return aId in this.hudReferences ? this.hudReferences[aId] : null;
+   },
+ 
+   /**
+-   * Returns the hudId that is corresponding to the given outer window ID.
+-   *
+-   * @param number aWindowId
+-   *        the outer window ID
+-   * @returns string the hudId
+-   */
+-  getHudIdByWindowId: function HS_getHudIdByWindowId(aWindowId)
+-  {
+-    return this.windowIds[aWindowId];
+-  },
+-
+-  /**
+    * Get the current filter string for the HeadsUpDisplay
+    *
+    * @param string aHUDId
+    * @returns string
+    */
+   getFilterStringByHUDId: function HS_getFilterStringbyHUDId(aHUDId) {
+     return this.getHudReferenceById(aHUDId).filterBox.value;
+   },
+@@ -1055,123 +927,25 @@ HUD_SERVICE.prototype =
  
      if (window.webConsoleCommandController) {
        window.controllers.removeController(window.webConsoleCommandController);
@@ -836,7 +881,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Animates the Console appropriately.
-@@ -1267,18 +1046,18 @@ HUD_SERVICE.prototype =
+@@ -1226,18 +1000,18 @@ HUD_SERVICE.prototype =
    /**
     * Reset the height of the Web Console.
     *
@@ -847,7 +892,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let HUD = this.hudReferences[aHUDId];
 -    let innerHeight = HUD.contentWindow.innerHeight;
 -    let chromeWindow = HUD.chromeDocument.defaultView;
-+    let innerHeight = HUD.browser.innerHeight;
++    let innerHeight = HUD.browser.clientHeight;
 +    let chromeWindow = HUD.chromeWindow;
      if (!HUD.consolePanel) {
        let splitterStyle = chromeWindow.getComputedStyle(HUD.splitter, null);
@@ -857,7 +902,27 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }
  
      let boxStyle = chromeWindow.getComputedStyle(HUD.HUDBox, null);
-@@ -1363,129 +1142,44 @@ HUD_SERVICE.prototype =
+@@ -1246,17 +1020,18 @@ HUD_SERVICE.prototype =
+                    parseInt(boxStyle.borderBottomWidth);
+ 
+     let height = this.lastConsoleHeight > 0 ? this.lastConsoleHeight :
+       Math.ceil(innerHeight * DEFAULT_CONSOLE_HEIGHT);
+ 
+     if ((innerHeight - height) < MINIMUM_PAGE_HEIGHT) {
+       height = innerHeight - MINIMUM_PAGE_HEIGHT;
+     }
+-    else if (height < MINIMUM_CONSOLE_HEIGHT) {
++
++    if (isNaN(height) || height < MINIMUM_CONSOLE_HEIGHT) {
+       height = MINIMUM_CONSOLE_HEIGHT;
+     }
+ 
+     HUD.HUDBox.style.height = height + "px";
+   },
+ 
+   /**
+    * Remember the height of the given Web Console, such that it can later be
+@@ -1322,129 +1097,44 @@ HUD_SERVICE.prototype =
      clipboardHelper.copyString(strings.join("\n"));
    }
  };
@@ -999,7 +1064,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  }
  
  HeadsUpDisplay.prototype = {
-@@ -1495,20 +1189,22 @@ HeadsUpDisplay.prototype = {
+@@ -1454,20 +1144,22 @@ HeadsUpDisplay.prototype = {
     *
     * @private
     * @type array
@@ -1023,7 +1088,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    _saveRequestAndResponseBodies: false,
  
    /**
-@@ -1538,54 +1234,33 @@ HeadsUpDisplay.prototype = {
+@@ -1497,54 +1189,33 @@ HeadsUpDisplay.prototype = {
    },
  
    get mainPopupSet()
@@ -1079,7 +1144,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      try {
        top = Services.prefs.getIntPref("devtools.webconsole.top");
      }
-@@ -1631,22 +1306,17 @@ HeadsUpDisplay.prototype = {
+@@ -1590,22 +1261,17 @@ HeadsUpDisplay.prototype = {
  
        panel.setAttribute("height", height);
  
@@ -1103,7 +1168,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        if (aEvent.target != panel) {
          return;
        }
-@@ -1715,17 +1385,17 @@ HeadsUpDisplay.prototype = {
+@@ -1674,17 +1340,17 @@ HeadsUpDisplay.prototype = {
    /**
     * Retrieve the Web Console panel title.
     *
@@ -1122,7 +1187,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      window: null
    },
  
-@@ -1814,64 +1484,25 @@ HeadsUpDisplay.prototype = {
+@@ -1773,64 +1439,25 @@ HeadsUpDisplay.prototype = {
        this.HUDBox.removeAttribute("flex");
        this.HUDBox.removeAttribute("height");
        this.HUDBox.style.height = height + "px";
@@ -1187,7 +1252,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        Array of cached messages coming from the remote Web Console
     *        content instance.
     */
-@@ -1905,40 +1536,16 @@ HeadsUpDisplay.prototype = {
+@@ -1864,40 +1491,16 @@ HeadsUpDisplay.prototype = {
      if (numChildren && this.outputNode.clientHeight) {
        // We also check the clientHeight to force a reflow, otherwise
        // ensureIndexIsVisible() does not work after outputNode.hidden = false.
@@ -1228,7 +1293,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    makeXULNode:
    function HUD_makeXULNode(aTag)
    {
-@@ -1947,25 +1554,24 @@ HeadsUpDisplay.prototype = {
+@@ -1906,25 +1509,24 @@ HeadsUpDisplay.prototype = {
  
    /**
     * Build the UI of each HeadsUpDisplay
@@ -1255,7 +1320,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let consoleCommandSet = this.makeXULNode("commandset");
      outerWrap.appendChild(consoleCommandSet);
  
-@@ -2020,17 +1626,17 @@ HeadsUpDisplay.prototype = {
+@@ -1979,17 +1581,17 @@ HeadsUpDisplay.prototype = {
  
      consoleWrap.appendChild(consoleFilterToolbar);
      consoleWrap.appendChild(hbox);
@@ -1274,7 +1339,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * sets the click events for all binary toggle filter buttons
     *
-@@ -2330,22 +1936,17 @@ HeadsUpDisplay.prototype = {
+@@ -2289,22 +1891,17 @@ HeadsUpDisplay.prototype = {
     *        The ID of the console.
     * @return void
     */
@@ -1298,7 +1363,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      clearButton.addEventListener("command", HUD_clearButton_onCommand, false);
  
      aToolbar.appendChild(clearButton);
-@@ -2384,18 +1985,16 @@ HeadsUpDisplay.prototype = {
+@@ -2343,18 +1940,16 @@ HeadsUpDisplay.prototype = {
        let positionPref = Services.prefs.getCharPref("devtools.webconsole.position");
        this.positionConsole(positionPref);
      }
@@ -1317,7 +1382,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        The message received from the remote Web Console instance.
     *        console service. This object needs to hold:
     *          - hudId - the Web Console ID.
-@@ -2727,17 +2326,18 @@ HeadsUpDisplay.prototype = {
+@@ -2686,17 +2281,18 @@ HeadsUpDisplay.prototype = {
    {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
@@ -1337,7 +1402,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        },
      };
      this.sendMessageToContent("WebConsole:Init", message);
-@@ -2781,16 +2381,19 @@ HeadsUpDisplay.prototype = {
+@@ -2740,16 +2336,19 @@ HeadsUpDisplay.prototype = {
          this._onInitComplete();
          break;
        case "WebConsole:NetworkActivity":
@@ -1357,7 +1422,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * now this method sends the web-console-created notification using the
     * nsIObserverService.
     *
-@@ -2926,16 +2529,24 @@ HeadsUpDisplay.prototype = {
+@@ -2885,16 +2484,24 @@ HeadsUpDisplay.prototype = {
      // once requests complete.
      if (HUDService.lastFinishedRequestCallback &&
          aMessage.meta.stages.indexOf("REQUEST_STOP") > -1 &&
@@ -1382,7 +1447,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @param function aCallback
     *        The function you want invoked when the user clicks on the message
     *        element.
-@@ -2979,19 +2590,16 @@ HeadsUpDisplay.prototype = {
+@@ -2938,19 +2545,16 @@ HeadsUpDisplay.prototype = {
  
      this._messageListeners.forEach(function(aName) {
        this.messageManager.removeMessageListener(aName, this);
@@ -1402,7 +1467,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      this.positionMenuitems.above.removeEventListener("command",
        this._positionConsoleAbove, false);
-@@ -3043,27 +2651,22 @@ function NodeFactory(aFactoryType, ignor
+@@ -3002,27 +2606,22 @@ function NodeFactory(aFactoryType, ignor
  
  /**
   * Create a JSTerminal or attach a JSTerm input node to an existing output node,
@@ -1432,7 +1497,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    this.historyIndex = 0;
    this.historyPlaceHolder = 0;  // this.history.length;
    this.autocompletePopup = new AutocompletePopup(this.document);
-@@ -3075,47 +2678,53 @@ function JSTerm(aHud, aMixin)
+@@ -3034,46 +2633,54 @@ function JSTerm(aHud, aMixin)
  JSTerm.prototype = {
    lastInputValue: "",
    COMPLETE_FORWARD: 0,
@@ -1499,7 +1564,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    this.mixins.attachUI();
 -  },
 -
--
++  get outputNode() this.hud.outputNode,
+ 
    /**
     * Asynchronously evaluate a string in the content process sandbox.
     *
@@ -1507,8 +1573,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        String to evaluate in the content process JavaScript sandbox.
     * @param function [aCallback]
     *        Optional function to be invoked when the evaluation result is
-    *        received.
-@@ -4031,129 +3640,27 @@ JSTerm.prototype = {
+@@ -3291,17 +2898,17 @@ JSTerm.prototype = {
+    * Clear the Web Console output.
+    *
+    * @param boolean aClearStorage
+    *        True if you want to clear the console messages storage associated to
+    *        this Web Console.
+    */
+   clearOutput: function JST_clearOutput(aClearStorage)
+   {
+-    let hud = HUDService.getHudReferenceById(this.hudId);
++    let hud = this.hud;
+     hud.cssNodes = {};
+ 
+     let outputNode = hud.outputNode;
+     let node;
+     while ((node = outputNode.firstChild)) {
+       if (node._evalCacheId && !node._panelOpen) {
+         this.clearObjectCache(node._evalCacheId);
+       }
+@@ -3990,129 +3597,27 @@ JSTerm.prototype = {
      this.inputNode.removeEventListener("keypress", this._keyPress, false);
      this.inputNode.removeEventListener("input", this._inputEventHandler, false);
      this.inputNode.removeEventListener("keyup", this._inputEventHandler, false);
@@ -1638,7 +1722,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Scrolls a node so that it's visible in its containing XUL "scrollbox"
-@@ -4689,18 +4196,18 @@ HeadsUpDisplayUICommands = {
+@@ -4648,18 +4153,18 @@ HeadsUpDisplayUICommands = {
    /**
     * Find the hudId for the active chrome window.
     * @return string|null
@@ -1659,7 +1743,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param nsIDOMEvent aEvent
     *        The event that triggered the filter change.
-@@ -4797,33 +4304,28 @@ HeadsUpDisplayUICommands = {
+@@ -4756,33 +4261,28 @@ HeadsUpDisplayUICommands = {
  // WebConsoleObserver
  //////////////////////////////////////////////////////////////////////////
  
@@ -1694,7 +1778,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  // CommandController
  ///////////////////////////////////////////////////////////////////////////////
  
-@@ -4908,412 +4410,31 @@ CommandController.prototype = {
+@@ -4867,412 +4367,31 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
@@ -2109,3 +2193,612 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -  // better than 'Object', and at least defaults to Object if nothing better
 -  return Object.prototype.toString.call(aObj).slice(8, -1);
 -}
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -20,38 +20,35 @@ include $(topsrcdir)/config/rules.mk
+ 	browser_webconsole_bug_580001_closing_after_completion.js \
+ 	browser_webconsole_bug_580400_groups.js \
+ 	browser_webconsole_bug_588730_text_node_insertion.js \
+ 	browser_webconsole_bug_601667_filter_buttons.js \
+ 	browser_webconsole_bug_597136_external_script_errors.js \
+ 	browser_webconsole_bug_597136_network_requests_from_chrome.js \
+ 	browser_webconsole_completion.js \
+ 	browser_webconsole_console_logging_api.js \
+-	browser_webconsole_consoleonpage.js \
+ 	browser_webconsole_chrome.js \
+ 	browser_webconsole_execution_scope.js \
+ 	browser_webconsole_for_of.js \
+ 	browser_webconsole_history.js \
+-	browser_webconsole_hud_getters.js \
+ 	browser_webconsole_js_input_and_output_styling.js \
+ 	browser_webconsole_js_input_expansion.js \
+ 	browser_webconsole_live_filtering_of_message_types.js \
+ 	browser_webconsole_live_filtering_on_search_strings.js \
+ 	browser_warn_user_about_replaced_api.js \
+ 	browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js \
+ 	browser_webconsole_bug_586388_select_all.js  \
+ 	browser_webconsole_bug_588967_input_expansion.js \
+ 	browser_webconsole_log_node_classes.js \
+ 	browser_webconsole_network_panel.js \
+ 	browser_webconsole_jsterm.js \
+ 	browser_webconsole_null_and_undefined_output.js \
+ 	browser_webconsole_output_order.js \
+ 	browser_webconsole_property_panel.js \
+ 	browser_webconsole_property_provider.js \
+-	browser_webconsole_registries.js \
+ 	browser_webconsole_bug_587617_output_copy.js \
+ 	browser_webconsole_bug_585237_line_limit.js \
+ 	browser_webconsole_bug_581231_close_button.js \
+ 	browser_webconsole_bug_582201_duplicate_errors.js \
+ 	browser_webconsole_bug_580454_timestamp_l10n.js \
+ 	browser_webconsole_netlogging.js \
+ 	browser_webconsole_bug_583816_No_input_and_Tab_key_pressed.js \
+ 	browser_webconsole_bug_594477_clickable_output.js \
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_580400_groups.js b/browser/devtools/webconsole/test/browser_webconsole_bug_580400_groups.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_580400_groups.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_580400_groups.js
+@@ -4,27 +4,25 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ // Tests that console groups behave properly.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testGroups, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, testGroups);
++  }, true);
+ }
+ 
+-function testGroups() {
+-  browser.removeEventListener("DOMContentLoaded", testGroups, false);
+-
+-  openConsole();
+-
+-  let HUD = HUDService.getHudByWindow(content);
++function testGroups(HUD) {
+   let jsterm = HUD.jsterm;
+-  let outputNode = jsterm.outputNode;
++  let outputNode = HUD.outputNode;
+ 
+   // We test for one group by testing for zero "new" groups. The
+   // "webconsole-new-group" class creates a divider. Thus one group is
+   // indicated by zero new groups, two groups are indicated by one new group,
+   // and so on.
+ 
+   let timestamp0 = Date.now();
+   jsterm.execute("0");
+@@ -41,14 +39,11 @@ function testGroups() {
+   for (let i = 0; i < outputNode.itemCount; i++) {
+     outputNode.getItemAtIndex(i).timestamp = 0;   // a "far past" value
+   }
+ 
+   jsterm.execute("2");
+   is(outputNode.querySelectorAll(".webconsole-new-group").length, 1,
+      "one group divider exists after the third console message");
+ 
+-  jsterm.clearOutput();
+-  jsterm.history.splice(0, jsterm.history.length);   // workaround for bug 592552
+-
+   finishTest();
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_586388_select_all.js b/browser/devtools/webconsole/test/browser_webconsole_bug_586388_select_all.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_586388_select_all.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_586388_select_all.js
+@@ -7,34 +7,32 @@
+  *  Patrick Walton <pcwalton@mozilla.com>
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/";
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded",
+-                           testSelectionWhenMovingBetweenBoxes, false);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, testSelectionWhenMovingBetweenBoxes);
++  }, true);
+ }
+ 
+-function testSelectionWhenMovingBetweenBoxes() {
+-  browser.removeEventListener("DOMContentLoaded",
+-                              testSelectionWhenMovingBetweenBoxes, false);
+-  openConsole();
+-
+-  let jsterm = HUDService.getHudByWindow(content).jsterm;
++function testSelectionWhenMovingBetweenBoxes(hud) {
++  let jsterm = hud.jsterm;
+ 
+   // Fill the console with some output.
+   jsterm.clearOutput();
+   jsterm.execute("1 + 2");
+   jsterm.execute("3 + 4");
+   jsterm.execute("5 + 6");
+ 
+-  outputNode = jsterm.outputNode;
++  let outputNode = hud.outputNode;
+ 
+   ok(outputNode.childNodes.length >= 3, "the output node has children after " +
+      "executing some JavaScript");
+ 
+   // Test that the global Firefox "Select All" functionality (e.g. Edit >
+   // Select All) works properly in the Web Console.
+   let commandController = window.webConsoleCommandController;
+   ok(commandController != null, "the window has a command controller object");
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js b/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js
+@@ -52,17 +52,17 @@ function addTabs(aWindow) {
+ 
+ function openConsoles() {
+   // open the Web Console for each of the four tabs and log a message.
+   let consolesOpen = 0;
+   for (let i = 0; i < openTabs.length; i++) {
+     let tab = openTabs[i];
+     openConsole(tab, function(index, hud) {
+       ok(hud, "HUD is open for tab " + index);
+-      hud.console.log("message for tab " + index);
++      hud.browser.contentWindow.console.log("message for tab " + index);
+       consolesOpen++;
+     }.bind(null, i));
+   }
+ 
+   waitForSuccess({
+     name: "4 web consoles opened",
+     validatorFn: function()
+     {
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_597460_filter_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_597460_filter_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_597460_filter_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_597460_filter_scroll.js
+@@ -5,43 +5,38 @@
+  *
+  * Contributor(s):
+  *  Mihai Șucan <mihai.sucan@gmail.com>
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-network.html";
+ 
+-function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
+-
+-  openConsole();
+-
+-  let hudId = HUDService.getHudIdByWindow(content);
+-  hud = HUDService.hudReferences[hudId];
++function consoleOpened(aHud) {
++  hud = aHud;
+ 
+   for (let i = 0; i < 200; i++) {
+-    hud.console.log("test message " + i);
++    content.console.log("test message " + i);
+   }
+ 
+-  HUDService.setFilterState(hudId, "network", false);
+-  HUDService.setFilterState(hudId, "networkinfo", false);
++  HUDService.setFilterState(hud.hudId, "network", false);
++  HUDService.setFilterState(hud.hudId, "networkinfo", false);
+ 
+   hud.filterBox.value = "test message";
+   HUDService.updateFilterText(hud.filterBox);
+ 
+   browser.addEventListener("load", tabReload, true);
+ 
+   executeSoon(function() {
+     content.location.reload();
+   });
+ }
+ 
+ function tabReload(aEvent) {
+-  browser.removeEventListener(aEvent.type, arguments.callee, true);
++  browser.removeEventListener(aEvent.type, tabReload, true);
+ 
+   let msgNode = hud.outputNode.querySelector(".webconsole-msg-network");
+   ok(msgNode, "found network message");
+   ok(msgNode.classList.contains("hud-filtered-by-type"),
+     "network message is filtered by type");
+   ok(msgNode.classList.contains("hud-filtered-by-string"),
+     "network message is filtered by string");
+ 
+@@ -57,11 +52,14 @@ function tabReload(aEvent) {
+   HUDService.setFilterState(hud.hudId, "network", true);
+   HUDService.setFilterState(hud.hudId, "networkinfo", true);
+ 
+   executeSoon(finishTest);
+ }
+ 
+ function test() {
+   addTab(TEST_URI);
+-  browser.addEventListener("load", tabLoad, true);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+@@ -136,17 +136,17 @@ function testGen() {
+   let consoleTest = inputValues[cpos][5] || inputValue;
+ 
+   HUD.jsterm.clearOutput();
+ 
+   // Test the console.log() output.
+ 
+   // Ugly but it does the job.
+   with (content) {
+-    eval("HUD.console.log(" + consoleTest + ")");
++    eval("content.console.log(" + consoleTest + ")");
+   }
+ 
+   waitForSuccess({
+     name: "console.log message for test #" + cpos,
+     validatorFn: function()
+     {
+       return HUD.outputNode.querySelector(".hud-log");
+     },
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
+@@ -12,23 +12,23 @@ function consoleOpened(HUD) {
+   HUD.jsterm.clearOutput();
+ 
+   let longMessage = "";
+   for (let i = 0; i < 50; i++) {
+     longMessage += "LongNonwrappingMessage";
+   }
+ 
+   for (let i = 0; i < 50; i++) {
+-    HUD.console.log("test message " + i);
++    content.console.log("test message " + i);
+   }
+ 
+-  HUD.console.log(longMessage);
++  content.console.log(longMessage);
+ 
+   for (let i = 0; i < 50; i++) {
+-    HUD.console.log("test message " + i);
++    content.console.log("test message " + i);
+   }
+ 
+   HUD.jsterm.execute("1+1");
+ 
+   function performTest() {
+     let scrollBox = HUD.outputNode.scrollBoxObject.element;
+     isnot(scrollBox.scrollTop, 0, "scroll location is not at the top");
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
+@@ -14,17 +14,17 @@ function testNext() {
+ }
+ 
+ function testGen() {
+   hud.jsterm.clearOutput();
+   let outputNode = hud.outputNode;
+   let scrollBox = outputNode.scrollBoxObject.element;
+ 
+   for (let i = 0; i < 150; i++) {
+-    hud.console.log("test message " + i);
++    content.console.log("test message " + i);
+   }
+ 
+   waitForSuccess({
+     name: "150 console.log messages displayed",
+     validatorFn: function()
+     {
+       return outputNode.querySelectorAll(".hud-log").length == 150;
+     },
+@@ -41,17 +41,17 @@ function testGen() {
+   outputNode.focus();
+ 
+   EventUtils.synthesizeKey("VK_HOME", {});
+ 
+   let topPosition = scrollBox.scrollTop;
+   isnot(topPosition, oldScrollTop, "scroll location updated (moved to top)");
+ 
+   // add a message and make sure scroll doesn't change
+-  hud.console.log("test message 150");
++  content.console.log("test message 150");
+ 
+   waitForSuccess({
+     name: "console.log message no. 151 displayed",
+     validatorFn: function()
+     {
+       return outputNode.querySelectorAll(".hud-log").length == 151;
+     },
+     successFn: testNext,
+@@ -63,17 +63,17 @@ function testGen() {
+   is(scrollBox.scrollTop, topPosition, "scroll location is still at the top");
+ 
+   // scroll back to the bottom
+   outputNode.lastChild.focus();
+   EventUtils.synthesizeKey("VK_END", {});
+ 
+   oldScrollTop = outputNode.scrollTop;
+ 
+-  hud.console.log("test message 151");
++  content.console.log("test message 151");
+ 
+   waitForSuccess({
+     name: "console.log message no. 152 displayed",
+     validatorFn: function()
+     {
+       return outputNode.querySelectorAll(".hud-log").length == 152;
+     },
+     successFn: testNext,
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
+@@ -19,17 +19,17 @@ function testGen() {
+   let outputNode = hud.outputNode;
+   let oldPref = Services.prefs.getIntPref("devtools.hud.loglimit.console");
+ 
+   Services.prefs.setIntPref("devtools.hud.loglimit.console", 140);
+   let scrollBoxElement = outputNode.scrollBoxObject.element;
+   let boxObject = outputNode.scrollBoxObject;
+ 
+   for (let i = 0; i < 150; i++) {
+-    hud.console.log("test message " + i);
++    content.console.log("test message " + i);
+   }
+ 
+   waitForSuccess({
+     name: "150 console.log messages displayed",
+     validatorFn: function()
+     {
+       return outputNode.querySelectorAll(".hud-log").length == 140;
+     },
+@@ -52,17 +52,17 @@ function testGen() {
+   boxObject.ensureElementIsVisible(msgNode);
+ 
+   isnot(scrollBoxElement.scrollTop, oldScrollTop,
+         "scroll location updated (scrolled to message)");
+ 
+   oldScrollTop = scrollBoxElement.scrollTop;
+ 
+   // add a message
+-  hud.console.log("hello world");
++  content.console.log("hello world");
+ 
+   waitForSuccess({
+     name: "console.log message #151 displayed",
+     validatorFn: function()
+     {
+       return outputNode.textContent.indexOf("hello world") > -1;
+     },
+     successFn: testNext,
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js
+@@ -9,17 +9,17 @@
+ 
+ function consoleOpened(hud) {
+   hud.jsterm.clearOutput();
+ 
+   let outputNode = hud.outputNode;
+   let boxObject = outputNode.scrollBoxObject.element;
+ 
+   for (let i = 0; i < 150; i++) {
+-    hud.console.log("test message " + i);
++    content.console.log("test message " + i);
+   }
+ 
+   waitForSuccess({
+     name: "console.log messages displayed",
+     validatorFn: function()
+     {
+       return outputNode.itemCount == 150;
+     },
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js b/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
+@@ -47,17 +47,17 @@ function testWebDevLimits(aEvent) {
+     successFn: testWebDevLimits2,
+     failureFn: testWebDevLimits2,
+   });
+ }
+ 
+ function testWebDevLimits2() {
+   // Fill the log with Web Developer errors.
+   for (let i = 0; i < 11; i++) {
+-    hud.console.log("test message " + i);
++    content.console.log("test message " + i);
+   }
+ 
+   waitForSuccess({
+     name: "11 console.log messages displayed",
+     validatorFn: function()
+     {
+       return outputNode.textContent.indexOf("test message 10") > -1;
+     },
+@@ -75,17 +75,17 @@ function testWebDevLimits2() {
+   });
+ }
+ 
+ function testJsLimits() {
+   gOldPref = Services.prefs.getIntPref("devtools.hud.loglimit.exception");
+   Services.prefs.setIntPref("devtools.hud.loglimit.exception", 10);
+ 
+   hud.jsterm.clearOutput();
+-  hud.console.log("testing JS limits");
++  content.console.log("testing JS limits");
+ 
+   // Find the sentinel entry.
+   waitForSuccess({
+     name: "console.log 'testing JS limits'",
+     validatorFn: function()
+     {
+       return outputNode.textContent.indexOf("testing JS limits") > -1;
+     },
+@@ -126,17 +126,17 @@ function testJsLimits2() {
+ 
+ var gCounter, gImage;
+ 
+ function testNetLimits() {
+   gOldPref = Services.prefs.getIntPref("devtools.hud.loglimit.network");
+   Services.prefs.setIntPref("devtools.hud.loglimit.network", 10);
+ 
+   hud.jsterm.clearOutput();
+-  hud.console.log("testing Net limits");
++  content.console.log("testing Net limits");
+ 
+   // Find the sentinel entry.
+   waitForSuccess({
+     name: "console.log 'testing Net limits'",
+     validatorFn: function()
+     {
+       return outputNode.textContent.indexOf("testing Net limits") > -1;
+     },
+@@ -171,17 +171,17 @@ function loadImage() {
+   testCssLimits();
+ }
+ 
+ function testCssLimits() {
+   gOldPref = Services.prefs.getIntPref("devtools.hud.loglimit.cssparser");
+   Services.prefs.setIntPref("devtools.hud.loglimit.cssparser", 10);
+ 
+   hud.jsterm.clearOutput();
+-  hud.console.log("testing CSS limits");
++  content.console.log("testing CSS limits");
+ 
+   // Find the sentinel entry.
+   waitForSuccess({
+     name: "console.log 'testing CSS limits'",
+     validatorFn: function()
+     {
+       return outputNode.textContent.indexOf("testing CSS limits") > -1;
+     },
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_consoleonpage.js b/browser/devtools/webconsole/test/browser_webconsole_consoleonpage.js
+deleted file mode 100644
+--- a/browser/devtools/webconsole/test/browser_webconsole_consoleonpage.js
++++ /dev/null
+@@ -1,47 +0,0 @@
+-/* vim:set ts=2 sw=2 sts=2 et: */
+-/* ***** BEGIN LICENSE BLOCK *****
+- * Any copyright is dedicated to the Public Domain.
+- * http://creativecommons.org/publicdomain/zero/1.0/
+- *
+- * Contributor(s):
+- *  Julian Viereck <jviereck@mozilla.com>
+- *  Mihai Șucan <mihai.sucan@gmail.com>
+- *
+- * ***** END LICENSE BLOCK ***** */
+-
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-own-console.html";
+-
+-function test()
+-{
+-  addTab(TEST_URI);
+-  browser.addEventListener("load", function onLoad() {
+-    browser.removeEventListener("load", onLoad, true);
+-    openConsole(null, testOpenWebConsole);
+-  }, true);
+-}
+-
+-function testOpenWebConsole(aHud)
+-{
+-  hud = aHud;
+-  ok(hud, "WebConsole was opened");
+-
+-  testOwnConsole();
+-}
+-
+-function testConsoleOnPage(console) {
+-  isnot(console, undefined, "Console object defined on page");
+-  is(console.foo, "bar", "Custom console is not overwritten");
+-}
+-
+-function testOwnConsole()
+-{
+-  let console = browser.contentWindow.wrappedJSObject.console;
+-  // Test console on the page. There is already one so it shouldn't be
+-  // overwritten by the WebConsole's console.
+-  testConsoleOnPage(console);
+-
+-  // Check that the console object is set on the HUD object although there
+-  // is no console object added to the page.
+-  ok(hud.console, "HUD console is defined");
+-  finishTest();
+-}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_hud_getters.js b/browser/devtools/webconsole/test/browser_webconsole_hud_getters.js
+deleted file mode 100644
+--- a/browser/devtools/webconsole/test/browser_webconsole_hud_getters.js
++++ /dev/null
+@@ -1,33 +0,0 @@
+-/* vim:set ts=2 sw=2 sts=2 et: */
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-// Tests that the HUD can be accessed via the HUD references in the HUD
+-// service.
+-
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+-
+-function test() {
+-  addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testHUDGetters, false);
+-}
+-
+-function testHUDGetters() {
+-  browser.removeEventListener("DOMContentLoaded", testHUDGetters, false);
+-
+-  openConsole();
+-
+-  var HUD = HUDService.getHudByWindow(content);
+-  var jsterm = HUD.jsterm;
+-  var klass = jsterm.inputNode.getAttribute("class");
+-  ok(klass == "jsterm-input-node", "We have the input node.");
+-
+-  var hudconsole = HUD.console;
+-  is(typeof hudconsole, "object", "HUD.console is an object");
+-  is(typeof hudconsole.log, "function", "HUD.console.log is a function");
+-  is(typeof hudconsole.info, "function", "HUD.console.info is a function");
+-
+-  finishTest();
+-}
+-
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_registries.js b/browser/devtools/webconsole/test/browser_webconsole_registries.js
+deleted file mode 100644
+--- a/browser/devtools/webconsole/test/browser_webconsole_registries.js
++++ /dev/null
+@@ -1,30 +0,0 @@
+-/* vim:set ts=2 sw=2 sts=2 et: */
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-// Tests that the HUD service keeps an accurate registry of all the Web Console
+-// instances.
+-
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+-
+-function test() {
+-  addTab(TEST_URI);
+-  browser.addEventListener("DOMContentLoaded", testRegistries, false);
+-}
+-
+-function testRegistries() {
+-  browser.removeEventListener("DOMContentLoaded", testRegistries, false);
+-
+-  openConsole();
+-
+-  let hud = HUDService.getHudByWindow(content);
+-  ok(hud, "we have a HUD");
+-  ok(HUDService.hudReferences[hud.hudId], "we have a HUD in hudReferences");
+-
+-  let windowID = WebConsoleUtils.getOuterWindowId(content);
+-  is(HUDService.windowIds[windowID], hud.hudId, "windowIds are working");
+-
+-  finishTest();
+-}
+-
