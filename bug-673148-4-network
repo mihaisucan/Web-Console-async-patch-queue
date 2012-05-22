@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent eb363f733adb5bbee9fde455b4af489d73bceca4
+# Parent 9185ab55df84dafefe000efc89367add36793eda
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1337613545 -10800
 
-Bug 673148 - (async-webconsole) Part 4 - Make network logging async
+Bug 673148 - (async-webconsole) Part 4 - Make network logging async; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
@@ -2563,7 +2563,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Remove the HUDBox and the consolePanel if the Web Console is inside a
      // floating panel.
-@@ -1751,24 +782,18 @@ HUD_SERVICE.prototype =
+@@ -1752,24 +783,18 @@ HUD_SERVICE.prototype =
      for (let windowID in this.windowIds) {
        if (this.windowIds[windowID] == aHUDId) {
          delete this.windowIds[windowID];
@@ -2589,7 +2589,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        this.suspend();
      }
    },
-@@ -1780,41 +805,28 @@ HUD_SERVICE.prototype =
+@@ -1781,41 +806,28 @@ HUD_SERVICE.prototype =
     * @returns void
     */
    wakeup: function HS_wakeup()
@@ -2631,7 +2631,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Shutdown all HeadsUpDisplays on xpcom-shutdown
     *
-@@ -1938,453 +950,61 @@ HUD_SERVICE.prototype =
+@@ -1939,453 +951,61 @@ HUD_SERVICE.prototype =
    /**
     * Registry of ApplicationHooks used by specified Gecko Apps
     *
@@ -3106,7 +3106,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    createSequencer: function HS_createSequencer(aInt)
    {
      function sequencer(aInt)
-@@ -2514,21 +1134,16 @@ HUD_SERVICE.prototype =
+@@ -2515,21 +1135,16 @@ HUD_SERVICE.prototype =
                       contentWindow: aContentWindow.top
                     };
  
@@ -3128,7 +3128,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          hud.reattachConsole(aContentWindow);
        }
      }
-@@ -2838,25 +1453,54 @@ HeadsUpDisplay.prototype = {
+@@ -2839,25 +1454,54 @@ HeadsUpDisplay.prototype = {
     * Web Console content script.
     *
     * @private
@@ -3184,7 +3184,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Get the tab associated to the HeadsUpDisplay object.
     */
-@@ -3517,27 +2161,27 @@ HeadsUpDisplay.prototype = {
+@@ -3518,27 +2162,27 @@ HeadsUpDisplay.prototype = {
     *        The console output DOM node.
     * @returns void
     */
@@ -3215,7 +3215,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      copyItem.setAttribute("label", l10n.getStr("copyCmd.label"));
      copyItem.setAttribute("accesskey", l10n.getStr("copyCmd.accesskey"));
      copyItem.setAttribute("key", "key_copy");
-@@ -3920,16 +2564,116 @@ HeadsUpDisplay.prototype = {
+@@ -3921,16 +2565,116 @@ HeadsUpDisplay.prototype = {
                                                aScriptError.lineNumber,
                                                null,
                                                null,
@@ -3332,7 +3332,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Setup the message manager used to communicate with the Web Console content
-@@ -3942,19 +2686,23 @@ HeadsUpDisplay.prototype = {
+@@ -3943,19 +2687,23 @@ HeadsUpDisplay.prototype = {
    {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
@@ -3358,7 +3358,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Handler for all of the messages coming from the Web Console content script.
     *
     * @private
-@@ -3986,16 +2734,22 @@ HeadsUpDisplay.prototype = {
+@@ -3987,16 +2735,22 @@ HeadsUpDisplay.prototype = {
          break;
        case "WebConsole:PageError":
          this.reportPageError(aMessage.json.pageError);
@@ -3381,7 +3381,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * now this method sends the web-console-created notification using the
     * nsIObserverService.
     *
-@@ -4063,29 +2817,98 @@ HeadsUpDisplay.prototype = {
+@@ -4064,29 +2818,98 @@ HeadsUpDisplay.prototype = {
          callback: aCallback,
        };
      }
@@ -3481,7 +3481,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      linkNode.setAttribute("aria-haspopup", "true");
  
-@@ -4122,16 +2945,17 @@ HeadsUpDisplay.prototype = {
+@@ -4123,16 +2946,17 @@ HeadsUpDisplay.prototype = {
      }
      if (this.gcliterm) {
        this.gcliterm.destroy();
@@ -3499,7 +3499,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.positionMenuitems.window.removeEventListener("command",
        this._positionConsoleWindow, false);
  
-@@ -5916,17 +4740,17 @@ HeadsUpDisplayUICommands = {
+@@ -5917,17 +4741,17 @@ HeadsUpDisplayUICommands = {
          break;
        }
        case "selectAll": {
@@ -3518,7 +3518,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  //////////////////////////////////////////////////////////////////////////
  // WebConsoleObserver
-@@ -6043,98 +4867,16 @@ CommandController.prototype = {
+@@ -6044,98 +4868,16 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
@@ -5119,7 +5119,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_resp
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
-@@ -13,113 +13,109 @@ const TEST_DATA_JSON_CONTENT =
+@@ -13,113 +13,107 @@ const TEST_DATA_JSON_CONTENT =
  
  let lastRequest = null;
  let requestCallback = null;
@@ -5163,9 +5163,8 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js b
  {
 -  browser.addEventListener("load", function(aEvent) {
 -    browser.removeEventListener(aEvent.type, arguments.callee, true);
-+  browser.addEventListener("load", function onLoad(aEvent) {
-+    browser.removeEventListener(aEvent.type, onLoad, true);
- 
+-
++  requestCallback = function() {
      // Check if page load was logged correctly.
      ok(lastRequest, "Page load was logged");
 -    is(lastRequest.url, TEST_NETWORK_REQUEST_URI,
@@ -5174,8 +5173,10 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js b
 -    is(lastRequest.method, "GET", "Method is correct");
 +    is(lastRequest.request.method, "GET", "Method is correct");
      lastRequest = null;
++    requestCallback = null;
      executeSoon(testPageLoadBody);
-   }, true);
+-  }, true);
++  };
  
    content.location = TEST_NETWORK_REQUEST_URI;
  }
@@ -5185,12 +5186,13 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js b
    // Turn off logging of request bodies and check again.
 -  browser.addEventListener("load", function(aEvent) {
 -    browser.removeEventListener(aEvent.type, arguments.callee, true);
-+  browser.addEventListener("load", function onLoad(aEvent) {
-+    browser.removeEventListener(aEvent.type, onLoad, true);
++  requestCallback = function() {
      ok(lastRequest, "Page load was logged again");
      lastRequest = null;
++    requestCallback = null;
      executeSoon(testXhrGet);
-   }, true);
+-  }, true);
++  };
  
    content.location.reload();
  }
@@ -5231,13 +5233,13 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js b
    // loaded again. Bind to the load event to catch when this is done.
 -  browser.addEventListener("load", function(aEvent) {
 -    browser.removeEventListener(aEvent.type, arguments.callee, true);
-+  browser.addEventListener("load", function onLoad(aEvent) {
-+    browser.removeEventListener(aEvent.type, onLoad, true);
++  requestCallback = function() {
      ok(lastRequest, "testFormSubmission() was logged");
 -    is(lastRequest.method, "POST", "Method is correct");
 +    is(lastRequest.request.method, "POST", "Method is correct");
      executeSoon(testLiveFilteringOnSearchStrings);
-   }, true);
+-  }, true);
++  };
  
    let form = content.document.querySelector("form");
    ok(form, "we have the HTML form");
@@ -5256,7 +5258,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js b
    isnot(countMessageNodes(), 0, "the log nodes are not hidden when the " +
      "search string is set to \"HTTP\"");
  
-@@ -141,16 +137,19 @@ function testLiveFilteringOnSearchString
+@@ -141,16 +135,19 @@ function testLiveFilteringOnSearchString
    setStringFilter("'foo'");
    is(countMessageNodes(), 0, "the log nodes are hidden when searching for " +
      "the string 'foo'");
