@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 9185ab55df84dafefe000efc89367add36793eda
+# Parent f31020318fc793ab0d8d9bb62940e2f06aec5f09
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1337613545 -10800
+# Date 1337961832 -10800
 
 Bug 673148 - (async-webconsole) Part 4 - Make network logging async; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
 
@@ -289,44 +289,6 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
   *
   * A list of helper functions used by Firebug can be found here:
   *   http://getfirebug.com/wiki/index.php/Command_Line_API
-@@ -550,17 +654,17 @@ function JSTermHelper(aJSTerm)
-     if (!WebConsoleUtils.isObjectInspectable(aObject)) {
-       return aObject;
-     }
- 
-     aJSTerm.helperEvaluated = true;
- 
-     let message = {
-       input: aJSTerm._evalInput,
--      objectCacheId: aJSTerm.sequenceId,
-+      objectCacheId: Manager.sequenceId,
-     };
- 
-     message.resultObject =
-       aJSTerm.prepareObjectForRemote(WebConsoleUtils.unwrap(aObject),
-                                      message.objectCacheId);
- 
-     Manager.sendMessage("JSTerm:InspectObject", message);
-   };
-@@ -611,17 +715,17 @@ function JSTermHelper(aJSTerm)
-   };
- }
- 
- /**
-  * The JavaScript terminal is meant to allow remote code execution for the Web
-  * Console.
-  */
- let JSTerm = {
--  get "window"() Manager.window,
-+  get window() Manager.window,
-   get console() this.window.console,
- 
-   /**
-    * The Cu.Sandbox() object where code is evaluated.
-    */
-   sandbox: null,
- 
-   _messageHandlers: {},
 @@ -917,16 +1021,20 @@ let JSTerm = {
      }
  
@@ -1435,18 +1397,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  function LogFactory(aMessagePrefix)
  {
    function log(aMessage) {
-@@ -145,34 +110,29 @@ const SEVERITY_LOG = 3;
- // A mapping from the console API log event levels to the Web Console
- // severities.
- const LEVELS = {
-   error: SEVERITY_ERROR,
-   warn: SEVERITY_WARNING,
-   info: SEVERITY_INFO,
-   log: SEVERITY_LOG,
-   trace: SEVERITY_LOG,
-+  debug: SEVERITY_LOG,
-   dir: SEVERITY_LOG,
-   group: SEVERITY_LOG,
+@@ -156,24 +121,18 @@ const LEVELS = {
    groupCollapsed: SEVERITY_LOG,
    groupEnd: SEVERITY_LOG,
    time: SEVERITY_LOG,
@@ -1473,7 +1424,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
  
  // The fragment of a CSS class name that identifies each category.
-@@ -211,323 +171,42 @@ const MESSAGE_PREFERENCE_KEYS = [
+@@ -212,323 +171,42 @@ const MESSAGE_PREFERENCE_KEYS = [
  // Possible directions that can be passed to HUDService.animate().
  const ANIMATE_OUT = 0;
  const ANIMATE_IN = 1;
@@ -1797,7 +1748,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * element.
   *
   * @param nsIDOMDocument aDocument
-@@ -545,647 +224,16 @@ function createElement(aDocument, aTag, 
+@@ -546,647 +224,16 @@ function createElement(aDocument, aTag, 
    if (aAttributes) {
      for (let attr in aAttributes) {
        node.setAttribute(attr, aAttributes[attr]);
@@ -2445,7 +2396,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * category's line limit by removing old messages as needed.
   *
   * @param aHUDId aHUDId
-@@ -1265,21 +313,16 @@ function HUD_SERVICE()
+@@ -1266,21 +313,16 @@ function HUD_SERVICE()
    // These methods access the "this" object, but they're registered as
    // event listeners. So we hammer in the "this" binding.
    this.onTabClose = this.onTabClose.bind(this);
@@ -2467,7 +2418,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Collection of outer window IDs mapping to HUD IDs.
-@@ -1290,26 +333,16 @@ function HUD_SERVICE()
+@@ -1291,26 +333,16 @@ function HUD_SERVICE()
     * Each HeadsUpDisplay has a set of filter preferences
     */
    this.filterPrefs = {};
@@ -2494,7 +2445,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * getter for UI commands to be used by the frontend
     *
     * @returns object
-@@ -1320,22 +353,16 @@ HUD_SERVICE.prototype =
+@@ -1321,22 +353,16 @@ HUD_SERVICE.prototype =
  
    /**
     * The sequencer is a generator (after initialization) that returns unique
@@ -2517,7 +2468,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    registerActiveContext: function HS_registerActiveContext(aContextDOMId)
    {
-@@ -1444,20 +471,16 @@ HUD_SERVICE.prototype =
+@@ -1445,20 +471,16 @@ HUD_SERVICE.prototype =
      let displayNode = chromeDocument.getElementById(hudId);
      let hudFound = (hudId in this.hudReferences) && displayNode;
  
@@ -2538,7 +2489,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Remove this context from the list of contexts that need the GCLI CSS
      // processing instruction and then remove the processing instruction if it
-@@ -1721,16 +744,24 @@ HUD_SERVICE.prototype =
+@@ -1722,16 +744,18 @@ HUD_SERVICE.prototype =
  
      // Remove children from the output. If the output is not cleared, there can
      // be leaks as some nodes has node.onclick = function; set and GC can't
@@ -2549,12 +2500,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
 +    let document = hud.chromeDocument;
 +
-+    let popupset = document.getElementById("mainPopupSet");
-+    let panels = popupset.querySelectorAll("panel[hudId=" + aHUDId + "]");
-+    for (let i = 0; i < panels.length; i++) {
-+      panels[i].hidePopup();
-+    }
-+
      hud.destroy();
  
      // Make sure that the console panel does not try to call
@@ -2563,7 +2508,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      // Remove the HUDBox and the consolePanel if the Web Console is inside a
      // floating panel.
-@@ -1752,24 +783,18 @@ HUD_SERVICE.prototype =
+@@ -1753,24 +777,24 @@ HUD_SERVICE.prototype =
      for (let windowID in this.windowIds) {
        if (this.windowIds[windowID] == aHUDId) {
          delete this.windowIds[windowID];
@@ -2573,11 +2518,12 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.unregisterActiveContext(aHUDId);
  
 -    let popupset = hud.chromeDocument.getElementById("mainPopupSet");
--    let panels = popupset.querySelectorAll("panel[hudId=" + aHUDId + "]");
--    for (let i = 0; i < panels.length; i++) {
--      panels[i].hidePopup();
--    }
--
++    let popupset = document.getElementById("mainPopupSet");
+     let panels = popupset.querySelectorAll("panel[hudId=" + aHUDId + "]");
+     for (let i = 0; i < panels.length; i++) {
+       panels[i].hidePopup();
+     }
+ 
      if (Object.keys(this.hudReferences).length == 0) {
 -      let autocompletePopup = hud.chromeDocument.
 +      let autocompletePopup = document.
@@ -2589,7 +2535,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        this.suspend();
      }
    },
-@@ -1781,41 +806,28 @@ HUD_SERVICE.prototype =
+@@ -1782,41 +806,28 @@ HUD_SERVICE.prototype =
     * @returns void
     */
    wakeup: function HS_wakeup()
@@ -2631,7 +2577,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Shutdown all HeadsUpDisplays on xpcom-shutdown
     *
-@@ -1939,453 +951,61 @@ HUD_SERVICE.prototype =
+@@ -1940,453 +951,61 @@ HUD_SERVICE.prototype =
    /**
     * Registry of ApplicationHooks used by specified Gecko Apps
     *
@@ -3106,7 +3052,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    createSequencer: function HS_createSequencer(aInt)
    {
      function sequencer(aInt)
-@@ -2515,21 +1135,16 @@ HUD_SERVICE.prototype =
+@@ -2516,21 +1135,16 @@ HUD_SERVICE.prototype =
                       contentWindow: aContentWindow.top
                     };
  
@@ -3128,7 +3074,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          hud.reattachConsole(aContentWindow);
        }
      }
-@@ -2839,25 +1454,54 @@ HeadsUpDisplay.prototype = {
+@@ -2840,25 +1454,54 @@ HeadsUpDisplay.prototype = {
     * Web Console content script.
     *
     * @private
@@ -3184,7 +3130,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Get the tab associated to the HeadsUpDisplay object.
     */
-@@ -3518,27 +2162,27 @@ HeadsUpDisplay.prototype = {
+@@ -3519,27 +2162,27 @@ HeadsUpDisplay.prototype = {
     *        The console output DOM node.
     * @returns void
     */
@@ -3215,7 +3161,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      copyItem.setAttribute("label", l10n.getStr("copyCmd.label"));
      copyItem.setAttribute("accesskey", l10n.getStr("copyCmd.accesskey"));
      copyItem.setAttribute("key", "key_copy");
-@@ -3921,16 +2565,116 @@ HeadsUpDisplay.prototype = {
+@@ -3922,16 +2565,116 @@ HeadsUpDisplay.prototype = {
                                                aScriptError.lineNumber,
                                                null,
                                                null,
@@ -3332,7 +3278,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Setup the message manager used to communicate with the Web Console content
-@@ -3943,19 +2687,23 @@ HeadsUpDisplay.prototype = {
+@@ -3944,19 +2687,23 @@ HeadsUpDisplay.prototype = {
    {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
@@ -3358,7 +3304,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Handler for all of the messages coming from the Web Console content script.
     *
     * @private
-@@ -3987,16 +2735,22 @@ HeadsUpDisplay.prototype = {
+@@ -3988,16 +2735,22 @@ HeadsUpDisplay.prototype = {
          break;
        case "WebConsole:PageError":
          this.reportPageError(aMessage.json.pageError);
@@ -3381,7 +3327,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * now this method sends the web-console-created notification using the
     * nsIObserverService.
     *
-@@ -4064,29 +2818,98 @@ HeadsUpDisplay.prototype = {
+@@ -4065,29 +2818,98 @@ HeadsUpDisplay.prototype = {
          callback: aCallback,
        };
      }
@@ -3481,7 +3427,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      linkNode.setAttribute("aria-haspopup", "true");
  
-@@ -4123,16 +2946,17 @@ HeadsUpDisplay.prototype = {
+@@ -4124,16 +2946,17 @@ HeadsUpDisplay.prototype = {
      }
      if (this.gcliterm) {
        this.gcliterm.destroy();
@@ -3499,7 +3445,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.positionMenuitems.window.removeEventListener("command",
        this._positionConsoleWindow, false);
  
-@@ -5917,17 +4741,17 @@ HeadsUpDisplayUICommands = {
+@@ -5914,17 +4737,17 @@ HeadsUpDisplayUICommands = {
          break;
        }
        case "selectAll": {
@@ -3518,7 +3464,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  //////////////////////////////////////////////////////////////////////////
  // WebConsoleObserver
-@@ -6044,98 +4868,16 @@ CommandController.prototype = {
+@@ -6041,98 +4864,16 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
@@ -3854,6 +3800,20 @@ diff --git a/browser/devtools/webconsole/NetworkHelper.jsm b/browser/devtools/we
      "text/xml": "xml",
      "text/xsl": "txt",
      "text/xul": "txt",
+@@ -328,11 +404,12 @@ var NetworkHelper =
+     "audio/midi": "media",
+     "audio/x-mid": "media",
+     "audio/x-midi": "media",
+     "music/crescendo": "media",
+     "audio/wav": "media",
+     "audio/x-wav": "media",
+     "text/json": "json",
+     "application/x-json": "json",
+-    "application/json-rpc": "json"
++    "application/json-rpc": "json",
++    "application/x-web-app-manifest+json",
+   }
+ }
 diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/webconsole/NetworkPanel.jsm
 new file mode 100644
 --- /dev/null

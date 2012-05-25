@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 18ebe789d64878d86bf066e16417139bc7ee271d
+# Parent 6238e868b0c78ff61e3b45f71320d460dc26450e
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1337707963 -10800
+# Date 1337961617 -10800
 
-Bug 673148 - (async-webconsole) Part 5 - HUDService.jsm cleanup
+Bug 673148 - (async-webconsole) Part 5 - HUDService.jsm cleanup; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
@@ -730,57 +730,46 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    {
      // register a display DOM node Id with the service.
      if (!aHUDId){
-@@ -740,59 +619,50 @@ HUD_SERVICE.prototype =
+@@ -736,70 +615,37 @@ HUD_SERVICE.prototype =
+    *
+    * @param string aHUDId
+    *        The ID of a HUD.
+    * @returns void
     */
    unregisterDisplay: function HS_unregisterDisplay(aHUDId)
    {
      let hud = this.getHudReferenceById(aHUDId);
- 
-     // Remove children from the output. If the output is not cleared, there can
-     // be leaks as some nodes has node.onclick = function; set and GC can't
-     // remove the nodes then.
+-
+-    // Remove children from the output. If the output is not cleared, there can
+-    // be leaks as some nodes has node.onclick = function; set and GC can't
+-    // remove the nodes then.
 -    if (hud.gcliterm) {
 -      hud.gcliterm.clearOutput();
 -    }
- 
+-
      let document = hud.chromeDocument;
  
-+    // Make sure that the console panel does not try to call
-+    // deactivateHUDForContext() again.
-+    hud.consoleWindowUnregisterOnHide = false;
-+
-     let popupset = document.getElementById("mainPopupSet");
-     let panels = popupset.querySelectorAll("panel[hudId=" + aHUDId + "]");
-     for (let i = 0; i < panels.length; i++) {
-       panels[i].hidePopup();
-     }
+     hud.destroy();
  
--    hud.destroy();
--
 -    // Make sure that the console panel does not try to call
 -    // deactivateHUDForContext() again.
 -    hud.consoleWindowUnregisterOnHide = false;
 -
-     // Remove the HUDBox and the consolePanel if the Web Console is inside a
-     // floating panel.
-     if (hud.consolePanel && hud.consolePanel.parentNode) {
-       hud.consolePanel.hidePopup();
-       hud.consolePanel.parentNode.removeChild(hud.consolePanel);
-       hud.consolePanel.removeAttribute("hudId");
-       hud.consolePanel = null;
-     }
- 
+-    // Remove the HUDBox and the consolePanel if the Web Console is inside a
+-    // floating panel.
+-    if (hud.consolePanel && hud.consolePanel.parentNode) {
+-      hud.consolePanel.hidePopup();
+-      hud.consolePanel.parentNode.removeChild(hud.consolePanel);
+-      hud.consolePanel.removeAttribute("hudId");
+-      hud.consolePanel = null;
+-    }
+-
 -    hud.HUDBox.parentNode.removeChild(hud.HUDBox);
-+    hud.destroy();
-+
-+    if (hud.HUDBox.parentNode) {
-+      hud.HUDBox.parentNode.removeChild(hud.HUDBox);
-+    }
- 
-     if (hud.splitter.parentNode) {
-       hud.splitter.parentNode.removeChild(hud.splitter);
-     }
- 
+-
+-    if (hud.splitter.parentNode) {
+-      hud.splitter.parentNode.removeChild(hud.splitter);
+-    }
+-
      delete this.hudReferences[aHUDId];
  
 -    for (let windowID in this.windowIds) {
@@ -791,6 +780,12 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -
 -    this.unregisterActiveContext(aHUDId);
 -
+-    let popupset = document.getElementById("mainPopupSet");
+-    let panels = popupset.querySelectorAll("panel[hudId=" + aHUDId + "]");
+-    for (let i = 0; i < panels.length; i++) {
+-      panels[i].hidePopup();
+-    }
+-
      if (Object.keys(this.hudReferences).length == 0) {
        let autocompletePopup = document.
                                getElementById("webConsole_autocompletePopup");
@@ -798,8 +793,23 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          autocompletePopup.parentNode.removeChild(autocompletePopup);
        }
  
++      let window = document.defaultView;
++
++      window.removeEventListener("unload", this.onWindowUnload, false);
++
++      let gBrowser = window.gBrowser;
++      let tabContainer = gBrowser.tabContainer;
++      tabContainer.removeEventListener("TabClose", this.onTabClose, false);
++
        this.suspend();
-@@ -824,24 +694,24 @@ HUD_SERVICE.prototype =
+     }
+   },
+ 
+   /**
+    * "Wake up" the Web Console activity. This is called when the first Web
+    * Console is open. This method initializes the various observers we have.
+    *
+@@ -824,24 +670,24 @@ HUD_SERVICE.prototype =
    {
      delete this.defaultFilterPrefs;
      delete this.lastFinishedRequestCallback;
@@ -827,7 +837,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param nsIDOMWindow aContentWindow
     * @returns object
-@@ -856,44 +726,40 @@ HUD_SERVICE.prototype =
+@@ -856,44 +702,40 @@ HUD_SERVICE.prototype =
     * Returns the hudId that is corresponding to the hud activated for the
     * passed aContentWindow. If there is no matching hudId null is returned.
     *
@@ -882,7 +892,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    getFilterStringByHUDId: function HS_getFilterStringbyHUDId(aHUDId) {
      return this.getHudReferenceById(aHUDId).filterBox.value;
    },
-@@ -907,60 +773,16 @@ HUD_SERVICE.prototype =
+@@ -907,60 +749,16 @@ HUD_SERVICE.prototype =
     */
    updateFilterText: function HS_updateFiltertext(aTextBoxNode)
    {
@@ -943,7 +953,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    lastFinishedRequestCallback: null,
  
-@@ -1056,123 +878,25 @@ HUD_SERVICE.prototype =
+@@ -1056,123 +854,25 @@ HUD_SERVICE.prototype =
  
      if (window.webConsoleCommandController) {
        window.controllers.removeController(window.webConsoleCommandController);
@@ -1069,7 +1079,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Animates the Console appropriately.
-@@ -1227,18 +951,18 @@ HUD_SERVICE.prototype =
+@@ -1227,18 +927,18 @@ HUD_SERVICE.prototype =
    /**
     * Reset the height of the Web Console.
     *
@@ -1090,7 +1100,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }
  
      let boxStyle = chromeWindow.getComputedStyle(HUD.HUDBox, null);
-@@ -1247,17 +971,18 @@ HUD_SERVICE.prototype =
+@@ -1247,17 +947,18 @@ HUD_SERVICE.prototype =
                     parseInt(boxStyle.borderBottomWidth);
  
      let height = this.lastConsoleHeight > 0 ? this.lastConsoleHeight :
@@ -1110,7 +1120,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Remember the height of the given Web Console, such that it can later be
-@@ -1323,129 +1048,44 @@ HUD_SERVICE.prototype =
+@@ -1323,129 +1024,44 @@ HUD_SERVICE.prototype =
      clipboardHelper.copyString(strings.join("\n"));
    }
  };
@@ -1252,7 +1262,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  }
  
  HeadsUpDisplay.prototype = {
-@@ -1455,20 +1095,23 @@ HeadsUpDisplay.prototype = {
+@@ -1455,20 +1071,23 @@ HeadsUpDisplay.prototype = {
     *
     * @private
     * @type array
@@ -1277,7 +1287,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    _saveRequestAndResponseBodies: false,
  
    /**
-@@ -1498,54 +1141,33 @@ HeadsUpDisplay.prototype = {
+@@ -1498,54 +1117,33 @@ HeadsUpDisplay.prototype = {
    },
  
    get mainPopupSet()
@@ -1333,7 +1343,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      try {
        top = Services.prefs.getIntPref("devtools.webconsole.top");
      }
-@@ -1591,22 +1213,17 @@ HeadsUpDisplay.prototype = {
+@@ -1591,22 +1189,17 @@ HeadsUpDisplay.prototype = {
  
        panel.setAttribute("height", height);
  
@@ -1357,7 +1367,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        if (aEvent.target != panel) {
          return;
        }
-@@ -1621,18 +1238,16 @@ HeadsUpDisplay.prototype = {
+@@ -1621,18 +1214,16 @@ HeadsUpDisplay.prototype = {
  
        if (width > 0) {
          Services.prefs.setIntPref("devtools.webconsole.width", panel.clientWidth);
@@ -1376,7 +1386,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let lastIndex = -1;
  
      if (this.outputNode.getIndexOfFirstVisibleRow) {
-@@ -1675,17 +1290,17 @@ HeadsUpDisplay.prototype = {
+@@ -1675,17 +1266,17 @@ HeadsUpDisplay.prototype = {
    /**
     * Retrieve the Web Console panel title.
     *
@@ -1395,7 +1405,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      window: null
    },
  
-@@ -1774,64 +1389,25 @@ HeadsUpDisplay.prototype = {
+@@ -1774,64 +1365,25 @@ HeadsUpDisplay.prototype = {
        this.HUDBox.removeAttribute("flex");
        this.HUDBox.removeAttribute("height");
        this.HUDBox.style.height = height + "px";
@@ -1460,7 +1470,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        Array of cached messages coming from the remote Web Console
     *        content instance.
     */
-@@ -1865,40 +1441,16 @@ HeadsUpDisplay.prototype = {
+@@ -1865,40 +1417,16 @@ HeadsUpDisplay.prototype = {
      if (numChildren && this.outputNode.clientHeight) {
        // We also check the clientHeight to force a reflow, otherwise
        // ensureIndexIsVisible() does not work after outputNode.hidden = false.
@@ -1501,7 +1511,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    makeXULNode:
    function HUD_makeXULNode(aTag)
    {
-@@ -1907,25 +1459,24 @@ HeadsUpDisplay.prototype = {
+@@ -1907,25 +1435,24 @@ HeadsUpDisplay.prototype = {
  
    /**
     * Build the UI of each HeadsUpDisplay
@@ -1528,7 +1538,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let consoleCommandSet = this.makeXULNode("commandset");
      outerWrap.appendChild(consoleCommandSet);
  
-@@ -1980,17 +1531,17 @@ HeadsUpDisplay.prototype = {
+@@ -1980,17 +1507,17 @@ HeadsUpDisplay.prototype = {
  
      consoleWrap.appendChild(consoleFilterToolbar);
      consoleWrap.appendChild(hbox);
@@ -1547,7 +1557,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * sets the click events for all binary toggle filter buttons
     *
-@@ -2290,22 +1841,17 @@ HeadsUpDisplay.prototype = {
+@@ -2290,22 +1817,17 @@ HeadsUpDisplay.prototype = {
     *        The ID of the console.
     * @return void
     */
@@ -1571,7 +1581,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      clearButton.addEventListener("command", HUD_clearButton_onCommand, false);
  
      aToolbar.appendChild(clearButton);
-@@ -2344,18 +1890,16 @@ HeadsUpDisplay.prototype = {
+@@ -2344,18 +1866,16 @@ HeadsUpDisplay.prototype = {
        let positionPref = Services.prefs.getCharPref("devtools.webconsole.position");
        this.positionConsole(positionPref);
      }
@@ -1590,7 +1600,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        The message received from the remote Web Console instance.
     *        console service. This object needs to hold:
     *          - hudId - the Web Console ID.
-@@ -2665,16 +2209,29 @@ HeadsUpDisplay.prototype = {
+@@ -2665,16 +2185,29 @@ HeadsUpDisplay.prototype = {
      this.makeOutputMessageLink(outputNode, function HUD__onFileClick() {
        let viewSourceUtils = chromeDocument.defaultView.gViewSourceUtils;
        viewSourceUtils.viewSource(aFileURI, null, chromeDocument);
@@ -1620,7 +1630,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Setup the message manager used to communicate with the Web Console content
-@@ -2687,19 +2244,21 @@ HeadsUpDisplay.prototype = {
+@@ -2687,19 +2220,21 @@ HeadsUpDisplay.prototype = {
    {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
@@ -1643,7 +1653,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.sendMessageToContent("WebConsole:Init", message);
    },
  
-@@ -2741,16 +2300,22 @@ HeadsUpDisplay.prototype = {
+@@ -2741,16 +2276,22 @@ HeadsUpDisplay.prototype = {
          this._onInitComplete();
          break;
        case "WebConsole:NetworkActivity":
@@ -1666,7 +1676,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * now this method sends the web-console-created notification using the
     * nsIObserverService.
     *
-@@ -2813,17 +2378,16 @@ HeadsUpDisplay.prototype = {
+@@ -2813,17 +2354,16 @@ HeadsUpDisplay.prototype = {
  
      if (aCallback) {
        this.asyncRequests[aMessage.id] = {
@@ -1684,7 +1694,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Console.
     *
     * @param object aMessage
-@@ -2887,16 +2451,32 @@ HeadsUpDisplay.prototype = {
+@@ -2887,16 +2427,32 @@ HeadsUpDisplay.prototype = {
      if (HUDService.lastFinishedRequestCallback &&
          aMessage.meta.stages.indexOf("REQUEST_STOP") > -1 &&
          aMessage.meta.stages.indexOf("TRANSACTION_CLOSE") > -1) {
@@ -1717,7 +1727,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        The function you want invoked when the user clicks on the message
     *        element.
     */
-@@ -2939,19 +2519,16 @@ HeadsUpDisplay.prototype = {
+@@ -2939,18 +2495,43 @@ HeadsUpDisplay.prototype = {
  
      this._messageListeners.forEach(function(aName) {
        this.messageManager.removeMessageListener(aName, this);
@@ -1728,7 +1738,34 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }
 -    if (this.gcliterm) {
 -      this.gcliterm.destroy();
--    }
++
++    // Make sure that the console panel does not try to call
++    // deactivateHUDForContext() again.
++    this.consoleWindowUnregisterOnHide = false;
++
++    let popupset = this.chromeDocument.getElementById("mainPopupSet");
++    let panels = popupset.querySelectorAll("panel[hudId=" + this.hudId + "]");
++    for (let i = 0; i < panels.length; i++) {
++      if (panels[i] != this.consolePanel) {
++        panels[i].hidePopup();
++      }
++    }
++
++    // Remove the HUDBox and the consolePanel if the Web Console is inside a
++    // floating panel.
++    if (this.consolePanel && this.consolePanel.parentNode) {
++      this.consolePanel.hidePopup();
++      this.consolePanel.parentNode.removeChild(this.consolePanel);
++      this.consolePanel = null;
++    }
++
++    if (this.HUDBox.parentNode) {
++      this.HUDBox.parentNode.removeChild(this.HUDBox);
++    }
++
++    if (this.splitter.parentNode) {
++      this.splitter.parentNode.removeChild(this.splitter);
+     }
  
      delete this.asyncRequests;
      delete this.messageManager;
@@ -1736,12 +1773,11 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      delete this.chromeDocument;
  
      this.positionMenuitems.above.removeEventListener("command",
-       this._positionConsoleAbove, false);
-@@ -3003,27 +2580,22 @@ function NodeFactory(aFactoryType, ignor
- 
+@@ -2997,27 +2578,22 @@ function NodeFactory(aFactoryType, ignor
  /**
-  * Create a JSTerminal or attach a JSTerm input node to an existing output node,
-  * given by the parent node.
+  * Create a JSTerminal (a JavaScript command line). This is attached to an
+  * existing HeadsUpDisplay (a Web Console instance). This code is responsible
+  * with handling command line input, code evaluation and result output.
   *
   * @constructor
   * @param object aHud
@@ -1767,7 +1803,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    this.historyIndex = 0;
    this.historyPlaceHolder = 0;  // this.history.length;
    this.autocompletePopup = new AutocompletePopup(this.document);
-@@ -3033,48 +2605,63 @@ function JSTerm(aHud, aMixin)
+@@ -3027,48 +2603,63 @@ function JSTerm(aHud, aMixin)
  }
  
  JSTerm.prototype = {
@@ -1852,7 +1888,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        String to evaluate in the content process JavaScript sandbox.
     * @param function [aCallback]
     *        Optional function to be invoked when the evaluation result is
-@@ -3292,17 +2879,17 @@ JSTerm.prototype = {
+@@ -3288,17 +2879,17 @@ JSTerm.prototype = {
     * Clear the Web Console output.
     *
     * @param boolean aClearStorage
@@ -1871,7 +1907,30 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        if (node._evalCacheId && !node._panelOpen) {
          this.clearObjectCache(node._evalCacheId);
        }
-@@ -3991,129 +3578,27 @@ JSTerm.prototype = {
+@@ -3509,22 +3100,16 @@ JSTerm.prototype = {
+     }
+     else {
+       throw new Error("Invalid argument 0");
+     }
+ 
+     return true;
+   },
+ 
+-  refocus: function JSTF_refocus()
+-  {
+-    this.inputNode.blur();
+-    this.inputNode.focus();
+-  },
+-
+   /**
+    * Check if the caret is at a location that allows selecting the previous item
+    * in history when the user presses the Up arrow key.
+    *
+    * @return boolean
+    *         True if the caret is at a location that allows selecting the
+    *         previous item in history when the user presses the Up arrow key,
+    *         otherwise false.
+@@ -3987,129 +3572,27 @@ JSTerm.prototype = {
      this.inputNode.removeEventListener("keypress", this._keyPress, false);
      this.inputNode.removeEventListener("input", this._inputEventHandler, false);
      this.inputNode.removeEventListener("keyup", this._inputEventHandler, false);
@@ -2001,7 +2060,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Scrolls a node so that it's visible in its containing XUL "scrollbox"
-@@ -4649,18 +4134,18 @@ HeadsUpDisplayUICommands = {
+@@ -4645,18 +4128,18 @@ HeadsUpDisplayUICommands = {
    /**
     * Find the hudId for the active chrome window.
     * @return string|null
@@ -2022,7 +2081,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param nsIDOMEvent aEvent
     *        The event that triggered the filter change.
-@@ -4757,33 +4242,28 @@ HeadsUpDisplayUICommands = {
+@@ -4753,33 +4236,28 @@ HeadsUpDisplayUICommands = {
  // WebConsoleObserver
  //////////////////////////////////////////////////////////////////////////
  
@@ -2057,7 +2116,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  // CommandController
  ///////////////////////////////////////////////////////////////////////////////
  
-@@ -4868,412 +4348,12 @@ CommandController.prototype = {
+@@ -4864,412 +4342,12 @@ CommandController.prototype = {
          break;
        case "cmd_selectAll":
          this.selectAll(outputNode);
@@ -3055,7 +3114,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_663443_panel_title.js b/browser/devtools/webconsole/test/browser_webconsole_bug_663443_panel_title.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_663443_panel_title.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_663443_panel_title.js
-@@ -1,50 +1,53 @@
+@@ -1,50 +1,57 @@
  /* vim:set ts=2 sw=2 sts=2 et: */
  /* Any copyright is dedicated to the Public Domain.
     http://creativecommons.org/publicdomain/zero/1.0/ */
@@ -3081,13 +3140,25 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_663443_pane
 +    validatorFn: function() {
 +      return HUD.consolePanel.label.indexOf("test2") > -1;
 +    },
-+    successFn: finishTest,
-+    failureFn: finishTest,
++    successFn: testEnd,
++    failureFn: testEnd,
 +  };
  
 -  document.addEventListener("popupshown", function popupShown() {
 -    document.removeEventListener("popupshown", popupShown, false);
--
++  waitForSuccess({
++    name: "initial panel title",
++    validatorFn: function() {
++      return HUD.consolePanel.label.indexOf("test1") > -1;
++    },
++    successFn: function() {
++      content.location = "data:text/html;charset=utf-8,<p>test2 for bug 663443";
++      waitForSuccess(waitForTitleChange);
++    },
++    failureFn: testEnd,
++  });
++}
+ 
 -    let hudId = HUDService.getHudIdByWindow(content);
 -
 -    ok(hudId, "Web Console is open");
@@ -3112,17 +3183,8 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_663443_pane
 -
 -    content.location = "data:text/html;charset=utf-8,<p>test2 for bug 663443";
 -  }, false);
-+  waitForSuccess({
-+    name: "initial panel title",
-+    validatorFn: function() {
-+      return HUD.consolePanel.label.indexOf("test1") > -1;
-+    },
-+    successFn: function() {
-+      content.location = "data:text/html;charset=utf-8,<p>test2 for bug 663443";
-+      waitForSuccess(waitForTitleChange);
-+    },
-+    failureFn: finishTest,
-+  });
++function testEnd() {
++  closeConsole(null, finishTest);
  }
  
  function test() {
@@ -3334,6 +3396,33 @@ deleted file mode 100644
 -  finishTest();
 -}
 -
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_window_zombie.js b/browser/devtools/webconsole/test/browser_webconsole_window_zombie.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_window_zombie.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_window_zombie.js
+@@ -23,20 +23,20 @@ function consoleOpened(hudRef) {
+   let hudBox = hudRef.HUDBox;
+ 
+   // listen for the panel popupshown event.
+   document.addEventListener("popupshown", function popupShown() {
+     document.removeEventListener("popupshown", popupShown, false);
+ 
+     ok(hudRef.consolePanel, "console is in a panel");
+ 
+-    document.addEventListener("popuphidden", function popupHidden() {
+-      document.removeEventListener("popuphidden", popupHidden, false);
++    Services.obs.addObserver(function onWebConsoleClose() {
++      Services.obs.removeObserver(onWebConsoleClose, "web-console-destroyed");
+       executeSoon(finishTest);
+-    }, false);
++    }, "web-console-destroyed", false);
+ 
+     // Close the window console via the menu item
+     let menu = document.getElementById("webConsole");
+     menu.click();
+   }, false);
+ 
+   hudRef.positionConsole("window");
+ }
 diff --git a/browser/devtools/webconsole/test/test-bug-678816-content.js b/browser/devtools/webconsole/test/test-bug-678816-content.js
 deleted file mode 100644
 --- a/browser/devtools/webconsole/test/test-bug-678816-content.js
