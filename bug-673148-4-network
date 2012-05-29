@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent f31020318fc793ab0d8d9bb62940e2f06aec5f09
+# Parent 2582b429e8969ae9f09a99a542d090643393ffba
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1337961832 -10800
+# Date 1338295685 -10800
 
-Bug 673148 - (async-webconsole) Part 4 - Make network logging async; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
+Bug 673148 - (async-webconsole) Part 4 - Make network logging async; r=rcampbell; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
@@ -331,7 +331,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
    QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
  
    /**
-@@ -1197,10 +1309,953 @@ let ConsoleListener = {
+@@ -1197,10 +1309,991 @@ let ConsoleListener = {
     * Remove the nsIConsoleService listener.
     */
    destroy: function CL_destroy()
@@ -375,6 +375,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +function NetworkResponseListener(aHttpActivity) {
 +  this.receivedData = "";
 +  this.httpActivity = aHttpActivity;
++  this.bodySize = 0;
 +}
 +
 +NetworkResponseListener.prototype = {
@@ -404,6 +405,11 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +   * Stores the received data as a string.
 +   */
 +  receivedData: null,
++
++  /**
++   * The network response body size.
++   */
++  bodySize: null,
 +
 +  /**
 +   * The nsIRequest we are started for.
@@ -447,6 +453,8 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +  {
 +    this._findOpenResponse();
 +    let data = NetUtil.readInputStreamToString(aInputStream, aCount);
++
++    this.bodySize += aCount;
 +
 +    if (!this.httpActivity.meta.discardResponseBody &&
 +        this.receivedData.length < RESPONSE_BODY_LIMIT) {
@@ -519,9 +527,6 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    if (openResponse.cookies) {
 +      logResponse.cookies = openResponse.cookies;
 +    }
-+    if (openResponse.contentType) {
-+      logResponse.contentType = openResponse.contentType;
-+    }
 +
 +    delete NetworkMonitor.openResponses[openResponse.id];
 +
@@ -545,21 +550,61 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +    this._findOpenResponse();
 +
-+    this.httpActivity.meta.stages.push("REQUEST_STOP");
++    let meta = this.httpActivity.meta;
++    let entry = this.httpActivity.log.entries[0];
++    let request = entry.request;
++    let response = entry.response;
 +
-+    if (!this.httpActivity.meta.discardResponseBody &&
-+        this.receivedData.length) {
-+      let logResponse = this.httpActivity.log.entries[0].response;
-+      logResponse.content = {
-+        size: this.receivedData.length,
-+        mimeType: logResponse.contentType,
-+        text: this.receivedData,
-+      };
++    meta.stages.push("REQUEST_STOP");
 +
-+      // Note that bodySize and content.size may not be accurate due to the
-+      // RESPONSE_BODY_LIMIT cap. Also, at this point we are not concerned about
-+      // response body compression - which is a violation of the HAR spec.
-+      logResponse.bodySize = this.receivedData.length;
++    if (!meta.discardResponseBody && this.receivedData.length) {
++      this._onComplete(this.receivedData);
++    }
++    else if (!meta.discardResponseBody && response.status == 304) {
++      // Response is cached, so we load it from cache.
++      let charset = this.request.contentCharset || this.httpActivity.charset;
++      NetworkHelper.loadFromCache(request.url, charset,
++                                  this._onComplete.bind(this));
++    }
++    else {
++      this._onComplete();
++    }
++  },
++
++  /**
++   * Handler for when the response completes. This function cleans up the
++   * response listener.
++   *
++   * @param string [aData]
++   *        Optional, the received data coming from the response listener or
++   *        from the cache.
++   */
++  _onComplete: function NRL__onComplete(aData)
++  {
++    let response = this.httpActivity.log.entries[0].response;
++
++    try {
++      response.bodySize = response.status != 304 ? this.request.contentLength : 0;
++    }
++    catch (ex) {
++      response.bodySize = -1;
++    }
++
++    try {
++      response.content = { mimeType: this.request.contentType };
++    }
++    catch (ex) {
++      response.content = { mimeType: "" };
++    }
++
++    if (response.content.mimeType && this.request.contentCharset) {
++      response.content.mimeType += "; charset=" + this.request.contentCharset;
++    }
++
++    response.content.size = this.bodySize || (aData || "").length;
++
++    if (aData) {
++      response.content.text = aData;
 +    }
 +
 +    this.receivedData = "";
@@ -720,16 +765,12 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +    };
 +
 +    let setCookieHeader = null;
-+    let contentType = null;
 +
 +    channel.visitResponseHeaders({
 +      visitHeader: function NM__visitHeader(aName, aValue) {
 +        let lowerName = aName.toLowerCase();
 +        if (lowerName == "set-cookie") {
 +          setCookieHeader = aValue;
-+        }
-+        else if (lowerName == "content-type") {
-+          contentType = aValue;
 +        }
 +        response.headers.push({ name: aName, value: aValue });
 +      }
@@ -741,9 +782,6 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 +
 +    if (setCookieHeader) {
 +      response.cookies = NetworkHelper.parseSetCookieHeader(setCookieHeader);
-+    }
-+    if (contentType) {
-+      response.contentType = contentType;
 +    }
 +
 +    // Determine the HTTP version.
@@ -3811,14 +3849,14 @@ diff --git a/browser/devtools/webconsole/NetworkHelper.jsm b/browser/devtools/we
      "application/x-json": "json",
 -    "application/json-rpc": "json"
 +    "application/json-rpc": "json",
-+    "application/x-web-app-manifest+json",
++    "application/x-web-app-manifest+json": "json",
    }
  }
 diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/webconsole/NetworkPanel.jsm
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/NetworkPanel.jsm
-@@ -0,0 +1,683 @@
+@@ -0,0 +1,668 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -3959,7 +3997,7 @@ new file mode 100644
 +
 +  /**
 +   * Returns the content type of the response body. This is based on the
-+   * response.contentType property. If this value is not available, then
++   * response.content.mimeType property. If this value is not available, then
 +   * the content type is guessed by the file extension of the request URL.
 +   *
 +   * @return string
@@ -3977,8 +4015,8 @@ new file mode 100644
 +    let response = entry.response;
 +
 +    let contentType = "";
-+    let types = response.contentType ?
-+                response.contentType.split(/,|;/) : [];
++    let types = response.content ?
++                (response.content.mimeType || "").split(/,|;/) : [];
 +    for (let i = 0; i < types.length; i++) {
 +      if (types[i] in NetworkHelper.mimeCategoryMap) {
 +        contentType = types[i];
@@ -4050,6 +4088,7 @@ new file mode 100644
 +  },
 +
 +  /**
++   * Tells if the server response is cached.
 +   *
 +   * @returns boolean
 +   *          Returns true if the server responded that the request is already
@@ -4061,6 +4100,7 @@ new file mode 100644
 +  },
 +
 +  /**
++   * Tells if the request body includes form data.
 +   *
 +   * @returns boolean
 +   *          Returns true if the posted body contains form data.
@@ -4163,8 +4203,7 @@ new file mode 100644
 +  {
 +    let entry = this.httpActivity.log.entries[0];
 +    let request = entry.request;
-+    let requestTime = WebConsoleUtils.
-+                      convertISO8601toMilliseconds(entry.startedDateTime);
++    let requestTime = new Date(entry.startedDateTime);
 +
 +    this._appendTextNode("headUrl", request.url);
 +    this._appendTextNode("headMethod", request.method);
@@ -4315,24 +4354,21 @@ new file mode 100644
 +   * the receiving of the response header and the end of the request as well as
 +   * the content of the response body on the NetworkPanel.
 +   *
-+   * @param [optional] string aCachedContent
-+   *        Cached content for this request. If this argument is set, the
-+   *        responseBodyCached section is displayed.
 +   * @returns void
 +   */
-+  _displayResponseBody: function NP__displayResponseBody(aCachedContent)
++  _displayResponseBody: function NP__displayResponseBody()
 +  {
 +    let entry = this.httpActivity.log.entries[0];
 +    let timing = entry.timings;
 +    let response = entry.response;
-+    let cached =  aCachedContent ? "Cached" : "";
++    let cached =  this._isResponseCached ? "Cached" : "";
 +
 +    this._appendTextNode("responseBody" + cached + "Info",
 +      this._format("durationMS", [timing.receive]));
 +
 +    this._displayNode("responseBody" + cached);
 +    this._appendTextNode("responseBody" + cached + "Content",
-+                            aCachedContent || response.content.text);
++                         response.content.text);
 +  },
 +
 +  /**
@@ -4366,15 +4402,6 @@ new file mode 100644
 +    this._displayNode("responseNoBody");
 +    this._appendTextNode("responseNoBodyInfo",
 +      this._format("durationMS", [timing.receive]));
-+  },
-+
-+  /*
-+   * Calls the isDoneCallback function if one is specified.
-+   */
-+  _callIsDone: function() {
-+    if (this.isDoneCallback) {
-+      this.isDoneCallback();
-+    }
 +  },
 +
 +  /**
@@ -4438,21 +4465,17 @@ new file mode 100644
 +          break;
 +        }
 +
-+        if (!response.content) {
++        if (!response.content || !response.content.text) {
 +          this._displayNoResponseBody();
-+          this._callIsDone();
 +        }
 +        else if (this._responseIsImage) {
 +          this._displayResponseImage();
-+          this._callIsDone();
 +        }
 +        else if (!this._isResponseBodyTextData) {
 +          this._displayResponseBodyUnknownType();
-+          this._callIsDone();
 +        }
-+        else if (response.content) {
++        else if (response.content.text) {
 +          this._displayResponseBody();
-+          this._callIsDone();
 +        }
 +
 +        break;
@@ -4559,71 +4582,6 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
  const TYPES = { OBJECT: 0,
                  FUNCTION: 1,
                  ARRAY: 2,
-@@ -632,16 +634,64 @@ var WebConsoleUtils = {
-       catch (ex) {
-         // window.history.next throws in the typeof check above.
-         return false;
-       }
-     }
- 
-     return false;
-   },
-+
-+  /**
-+   * Convert a date from the milliseconds format to the ISO 8601 date format.
-+   *
-+   * @param integer aTime
-+   *        Milliseconds since 1 January 1970 00:00:00 UTC.
-+   * @return string
-+   *         The date in ISO 8601 format.
-+   */
-+  millisecondsToISO8601: function WCU_millisecondsToISO8601(aTime)
-+  {
-+    // XXX: for reviewer: can I use ISO8601DateUtils.jsm?
-+    let date = new Date(aTime);
-+    let month = date.getMonth();
-+    let day = date.getDay();
-+    let hours = date.getHours();
-+    let minutes = date.getMinutes();
-+    let seconds = date.getSeconds();
-+    let ms = date.getMilliseconds();
-+    let offset = date.getTimezoneOffset();
-+    let offsetSign = offset > 0 ? "-" : "+";
-+    let offsetHours = Math.abs(Math.floor(offset / 60));
-+    let offsetMinutes = Math.abs(offset % 60);
-+    return date.getFullYear() + "-" +
-+           (month < 10 ? "0" + month : month) + "-" +
-+           (day < 10 ? "0" + day : day) + "T" +
-+           (hours < 10 ? "0" + hours : hours) + ":" +
-+           (minutes < 10 ? "0" + minutes : minutes) + ":" +
-+           (seconds < 10 ? "0" + seconds : seconds) + "." +
-+           ms + offsetSign +
-+           (offsetHours < 10 ? "0" + offsetHours : offsetHours) + ":" +
-+           (offsetMinutes < 10 ? "0" + offsetMinutes : offsetMinutes);
-+  },
-+
-+  /**
-+   * Convert a date from the ISO 8601 format into milliseconds since 1 January
-+   * 1970 00:00:00 UTC.
-+   *
-+   * @param string aTime
-+   *        The date in ISO 8601 format.
-+   * @return string
-+   *         Milliseconds since 1 January 1970 00:00:00 UTC.
-+   */
-+  convertISO8601toMilliseconds: function WCU_convertISO8601toMilliseconds(aTime)
-+  {
-+    // XXX: for reviewer: can I use ISO8601DateUtils.jsm?
-+    return new Date(aTime).getTime();
-+  },
- };
- 
- //////////////////////////////////////////////////////////////////////////
- // Localization
- //////////////////////////////////////////////////////////////////////////
- 
- WebConsoleUtils.l10n = {
-   /**
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js b/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js
@@ -5028,8 +4986,9 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_resp
 +  is(readHeader("x-foobar-bug630733"), "bazbaz",
       "X-Foobar-bug630733 is correct");
 -  let body = lastFinishedRequests["301"].response.body;
+-  ok(!body, "body discarded for request 1");
 +  let body = lastFinishedRequests["301"].log.entries[0].response.content;
-   ok(!body, "body discarded for request 1");
++  ok(!body.text, "body discarded for request 1");
  
 -  let headers1 = lastFinishedRequests["404"].response.header;
 -  ok(!headers1["Location"], "no Location header");
@@ -5306,7 +5265,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js b
 -    ok(!lastRequest.response.listener, "No response listener is stored");
 +    is(lastRequest.request.method, "GET", "Method is correct");
 +    ok(!lastRequest.request.postData, "No request body was stored");
-+    ok(!lastRequest.response.content, "No response body was stored");
++    ok(!lastRequest.response.content.text, "No response body was stored");
  
      lastRequest = null;
 +    requestCallback = null;
@@ -5448,7 +5407,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js b
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
-@@ -63,35 +63,48 @@ function checkNodeKeyValue(aPanel, aId, 
+@@ -63,141 +63,174 @@ function checkNodeKeyValue(aPanel, aId, 
  function testGen() {
    let filterBox = HUDService.getHudByWindow(content).filterBox;
  
@@ -5479,6 +5438,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
 +        },
 +        response: {
 +          headers: [],
++          content: {},
 +        },
 +        timings: {},
 +      }],
@@ -5511,8 +5471,16 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
  
    yield;
  
++  info("test 1");
++
    checkIsVisible(networkPanel, {
-@@ -105,99 +118,111 @@ function testGen() {
+     requestCookie: false,
+     requestFormData: false,
+     requestBody: false,
+     responseContainer: false,
+     responseBody: false,
+     responseNoBody: false,
+     responseImage: false,
      responseImageCached: false
    });
  
@@ -5522,6 +5490,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
  
    // Test request body.
 -  httpActivity.request.body = "hello world";
++  info("test 2: request body");
 +  httpActivity.meta.discardRequestBody = false;
 +  entry.request.postData = { text: "hello world" };
    networkPanel.update();
@@ -5545,11 +5514,12 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
 -    "Content-Type": "text/html",
 -    leaveHouses: "true"
 -  }
++  info("test 3: response header");
 +  entry.timings.wait = 10;
 +  entry.response.httpVersion = "HTTP/3.14";
 +  entry.response.status = 999;
 +  entry.response.statusText = "earthquake win";
-+  entry.response.contentType = "text/html";
++  entry.response.content.mimeType = "text/html";
 +  entry.response.headers.push(
 +    { name: "Content-Type", value: "text/html" },
 +    { name: "leaveHouses", value: "true" }
@@ -5577,6 +5547,8 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
 -  httpActivity.timing.RESPONSE_COMPLETE = 2500;
 -  // This is necessary to show that the request is done.
 -  httpActivity.timing.TRANSACTION_CLOSE = 2500;
++  info("test 4");
++
 +  httpActivity.meta.discardResponseBody = false;
 +  entry.timings.receive = 2;
    networkPanel.update();
@@ -5593,6 +5565,8 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    });
  
 -  httpActivity.response.isDone = true;
++  info("test 5");
++
 +  httpActivity.meta.stages.push("REQUEST_STOP", "TRANSACTION_CLOSE");
    networkPanel.update();
  
@@ -5612,13 +5586,12 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    // Second run: Test for cookies and response body.
 -  httpActivity.request.header.Cookie = "foo=bar;  hello=world";
 -  httpActivity.response.body = "get out here";
++  info("test 6: cookies and response body");
 +  entry.request.cookies.push(
 +    { name: "foo", value: "bar" },
 +    { name: "hello", value: "world" }
 +  );
-+  entry.response.content = {
-+    text: "get out here",
-+  };
++  entry.response.content.text = "get out here";
  
    networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
 -  is (networkPanel, httpActivity.panels[1].get(), "Network panel stored on httpActivity object");
@@ -5641,7 +5614,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
      responseBody: true,
      responseNoBody: false,
      responseImage: false,
-@@ -207,18 +232,19 @@ function testGen() {
+@@ -207,18 +240,20 @@ function testGen() {
    checkNodeKeyValue(networkPanel, "requestCookieContent", "foo", "bar");
    checkNodeKeyValue(networkPanel, "requestCookieContent", "hello", "world");
    checkNodeContent(networkPanel, "responseBodyContent", "get out here");
@@ -5652,8 +5625,9 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    // Check image request.
 -  httpActivity.response.header["Content-Type"] = "image/png";
 -  httpActivity.url = TEST_IMG;
++  info("test 7: image request");
 +  entry.response.headers[1].value = "image/png";
-+  entry.response.contentType = "image/png";
++  entry.response.content.mimeType = "image/png";
 +  entry.request.url = TEST_IMG;
  
    networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
@@ -5663,7 +5637,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    }, true);
  
    yield;
-@@ -254,17 +280,19 @@ function testGen() {
+@@ -254,17 +289,20 @@ function testGen() {
      yield;
    }
    else {
@@ -5673,6 +5647,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
  
    // Check cached image request.
 -  httpActivity.response.status = "HTTP/1.1 304 Not Modified";
++  info("test 8: cached image request");
 +  entry.response.httpVersion = "HTTP/1.1";
 +  entry.response.status = 304;
 +  entry.response.statusText = "Not Modified";
@@ -5684,7 +5659,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    }, true);
  
    yield;
-@@ -281,21 +309,21 @@ function testGen() {
+@@ -281,21 +319,22 @@ function testGen() {
    });
  
    let imgNode = networkPanel.document.getElementById("responseImageCachedNode");
@@ -5696,6 +5671,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
 -  httpActivity.request.body = [
 -    "Content-Type:      application/x-www-form-urlencoded\n" +
 -    "Content-Length: 59\n" +
++  info("test 9: sent form data");
 +  entry.request.postData.text = [
 +    "Content-Type:      application/x-www-form-urlencoded",
 +    "Content-Length: 59",
@@ -5710,7 +5686,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    }, true);
  
    yield;
-@@ -311,17 +339,17 @@ function testGen() {
+@@ -311,17 +350,18 @@ function testGen() {
      responseImageCached: true
    });
  
@@ -5720,6 +5696,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
  
    // Test no space after Content-Type:
 -  httpActivity.request.body = "Content-Type:application/x-www-form-urlencoded\n";
++  info("test 10: no space after Content-Type header in post data");
 +  entry.request.postData.text = "Content-Type:application/x-www-form-urlencoded\n";
  
    networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
@@ -5729,7 +5706,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    }, true);
  
    yield;
-@@ -336,29 +364,39 @@ function testGen() {
+@@ -336,65 +376,59 @@ function testGen() {
      responseImage: false,
      responseImageCached: true
    });
@@ -5738,42 +5715,43 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
  
    // Test cached data.
  
-+  /*
-+  // XXX: for reviewer: this is no longer valid since the Network Panel no
-+  // longer shows cached responses. Additionally, even if it would, it's no
-+  // longer up to the network panel to load the cached URL. I was really
-+  // surprised by this code and the "magic" response.body that shows up.
-+  // If you consider appropriate I can add a loadFromCache() call in
-+  // HUDService-content NetworkMonitor code to send the cached response for
-+  // status 304. Thoughts?
+-  // Load a Latin-1 encoded page.
+-  browser.addEventListener("load", function onLoad () {
+-    browser.removeEventListener("load", onLoad, true);
+-    httpActivity.charset = content.document.characterSet;
++  info("test 11: cached data");
 +
-   // Load a Latin-1 encoded page.
-   browser.addEventListener("load", function onLoad () {
-     browser.removeEventListener("load", onLoad, true);
-     httpActivity.charset = content.document.characterSet;
++  entry.request.url = TEST_ENCODING_ISO_8859_1;
++  entry.response.headers[1].value = "application/json";
++  entry.response.content.mimeType = "application/json";
++  entry.response.content.text = "my cached data is here!";
++
++  networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
++  networkPanel.panel.addEventListener("load", function onLoad() {
++    networkPanel.panel.removeEventListener("load", onLoad, true);
      testDriver.next();
    }, true);
 -  browser.contentWindow.wrappedJSObject.document.location = TEST_ENCODING_ISO_8859_1;
-+  content.location = TEST_ENCODING_ISO_8859_1;
- 
-   yield;
- 
+-
+-  yield;
+-
 -  httpActivity.url = TEST_ENCODING_ISO_8859_1;
 -  httpActivity.response.header["Content-Type"] = "application/json";
 -  httpActivity.response.body = "";
-+  entry.request.url = TEST_ENCODING_ISO_8859_1;
-+  entry.response.headers[1].value = "application/json";
-+  entry.response.contentType = "application/json";
-+  entry.response.content.text = "";
- 
-   networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
-   networkPanel.isDoneCallback = function NP_doneCallback() {
-     networkPanel.isDoneCallback = null;
-     testDriver.next();
-   }
+-
+-  networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
+-  networkPanel.isDoneCallback = function NP_doneCallback() {
+-    networkPanel.isDoneCallback = null;
+-    testDriver.next();
+-  }
  
    yield;
-@@ -371,30 +409,30 @@ function testGen() {
+ 
+   checkIsVisible(networkPanel, {
+     requestBody: false,
+     requestFormData: true,
+     requestCookie: true,
+     responseContainer: true,
      responseBody: false,
      responseBodyCached: true,
      responseNoBody: false,
@@ -5781,17 +5759,18 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
      responseImageCached: false
    });
  
-   checkNodeContent(networkPanel, "responseBodyCachedContent", "<body>\u00fc\u00f6\u00E4</body>");
--  networkPanel.panel.hidePopup();
-+  return;
+-  checkNodeContent(networkPanel, "responseBodyCachedContent", "<body>\u00fc\u00f6\u00E4</body>");
++  checkNodeContent(networkPanel, "responseBodyCachedContent",
++                   "my cached data is here!");
 +
-+  networkPanel.panel.hidePopup(); */
+   networkPanel.panel.hidePopup();
  
    // Test a response with a content type that can't be displayed in the
    // NetworkPanel.
 -  httpActivity.response.header["Content-Type"] = "application/x-shockwave-flash";
++  info("test 12: unknown content type");
 +  entry.response.headers[1].value = "application/x-shockwave-flash";
-+  entry.response.contentType = "application/x-shockwave-flash";
++  entry.response.content.mimeType = "application/x-shockwave-flash";
  
    networkPanel = HUDService.openNetworkPanel(filterBox, httpActivity);
 -  networkPanel.isDoneCallback = function NP_doneCallback() {
@@ -5813,7 +5792,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
      requestFormData: true,
      requestCookie: true,
      responseContainer: true,
-@@ -448,9 +486,11 @@ function testGen() {
+@@ -448,9 +482,11 @@ function testGen() {
    else
      ok(true, "Flash not installed");
  
